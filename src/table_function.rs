@@ -31,9 +31,18 @@ macro_rules! dispatch_yield_loop {
 
             // Write coordinates
             for dim in 0..rank {
-                let mut coord_vector = $output.flat_vector(dim);
-                let coord_slice = coord_vector.as_mut_slice::<i64>();
-                coord_slice[i] = global_coords[dim] as i64;
+                let dim_name = &$bind_data.dim_names[dim];
+                if let Some(coord_vals) = $bind_data.coords.get(dim_name) {
+                    let mut coord_vector = $output.flat_vector(dim);
+                    let coord_slice = coord_vector.as_mut_slice::<f64>();
+                    // O(1) lookup of the physical coordinate value
+                    coord_slice[i] = coord_vals[global_coords[dim] as usize];
+                } else {
+                    let mut coord_vector = $output.flat_vector(dim);
+                    let coord_slice = coord_vector.as_mut_slice::<i64>();
+                    // Fallback to integer index
+                    coord_slice[i] = global_coords[dim] as i64;
+                }
             }
 
             // Write value
