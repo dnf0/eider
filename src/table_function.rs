@@ -16,6 +16,10 @@ macro_rules! dispatch_yield_loop {
 
         let rank = $bind_data.shape.len();
 
+        let coord_arrays: Vec<Option<&Vec<f64>>> = (0..rank)
+            .map(|dim| $bind_data.coords.get(&$bind_data.dim_names[dim]))
+            .collect();
+
         // Output vectors
         // Coordinates are the first `rank` columns. Value is the last column.
         let mut value_vector = $output.flat_vector(rank);
@@ -31,12 +35,14 @@ macro_rules! dispatch_yield_loop {
 
             // Write coordinates
             for dim in 0..rank {
-                let dim_name = &$bind_data.dim_names[dim];
-                if let Some(coord_vals) = $bind_data.coords.get(dim_name) {
+                if let Some(coord_vals) = coord_arrays[dim] {
                     let mut coord_vector = $output.flat_vector(dim);
                     let coord_slice = coord_vector.as_mut_slice::<f64>();
-                    // O(1) lookup of the physical coordinate value
-                    coord_slice[i] = coord_vals[global_coords[dim] as usize];
+                    // O(1) lookup of the physical coordinate value, with graceful fallback
+                    coord_slice[i] = coord_vals
+                        .get(global_coords[dim] as usize)
+                        .copied()
+                        .unwrap_or(f64::NAN);
                 } else {
                     let mut coord_vector = $output.flat_vector(dim);
                     let coord_slice = coord_vector.as_mut_slice::<i64>();
