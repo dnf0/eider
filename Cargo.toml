@@ -12,7 +12,7 @@ default = []
 loadable-extension = ["duckdb/loadable-extension", "duckdb/vtab-loadable"]
 
 [dependencies]
-duckdb = { version = "1.1.1", features = ["vtab", "buildtime_bindgen"] }
+duckdb = { version = "1.1.1", features = ["bundled", "vtab", "buildtime_bindgen"] }
 serde_json = "1.0"
 zarrs = "0.16.4"
 
