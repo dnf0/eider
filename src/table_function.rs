@@ -119,30 +119,42 @@ impl VTab for ReadZarrVTab {
 
         let mut coords = std::collections::HashMap::new();
         // Eagerly load 1D coordinate arrays if they exist
-        for name in &dim_names {
+        for (dim_index, name) in dim_names.iter().enumerate() {
             if let Ok(coord_array) = Array::open(Arc::clone(&store_arc), &format!("/{}", name)) {
-                // Assuming coordinate arrays are small and fit in a single chunk [0]
-                if let Ok(chunk_bytes) = coord_array.retrieve_chunk(&[0]) {
-                    let bytes = chunk_bytes.into_fixed().unwrap().into_owned();
-                    let vals: Vec<f64> = match coord_array.data_type() {
-                        zarrs::array::DataType::Float64 => {
-                            bytemuck::cast_slice::<u8, f64>(&bytes).to_vec()
+                // Ensure it's a 1D array
+                if coord_array.shape().len() == 1 {
+                    // Assuming coordinate arrays are small and fit in a single chunk [0]
+                    if let Ok(chunk_bytes) = coord_array.retrieve_chunk(&[0]) {
+                        let bytes = chunk_bytes.into_fixed().unwrap().into_owned();
+                        let vals: Vec<f64> = match coord_array.data_type() {
+                            zarrs::array::DataType::Float64 => {
+                                bytemuck::cast_slice::<u8, f64>(&bytes).to_vec()
+                            }
+                            zarrs::array::DataType::Float32 => {
+                                bytemuck::cast_slice::<u8, f32>(&bytes)
+                                    .iter()
+                                    .map(|&v| v as f64)
+                                    .collect()
+                            }
+                            zarrs::array::DataType::Int64 => {
+                                bytemuck::cast_slice::<u8, i64>(&bytes)
+                                    .iter()
+                                    .map(|&v| v as f64)
+                                    .collect()
+                            }
+                            zarrs::array::DataType::Int32 => {
+                                bytemuck::cast_slice::<u8, i32>(&bytes)
+                                    .iter()
+                                    .map(|&v| v as f64)
+                                    .collect()
+                            }
+                            _ => continue,
+                        };
+                        // Validate that the loaded chunk covers the entire dimension length
+                        if vals.len() as u64 == shape[dim_index] {
+                            coords.insert(name.clone(), vals);
                         }
-                        zarrs::array::DataType::Float32 => bytemuck::cast_slice::<u8, f32>(&bytes)
-                            .iter()
-                            .map(|&v| v as f64)
-                            .collect(),
-                        zarrs::array::DataType::Int64 => bytemuck::cast_slice::<u8, i64>(&bytes)
-                            .iter()
-                            .map(|&v| v as f64)
-                            .collect(),
-                        zarrs::array::DataType::Int32 => bytemuck::cast_slice::<u8, i32>(&bytes)
-                            .iter()
-                            .map(|&v| v as f64)
-                            .collect(),
-                        _ => continue,
-                    };
-                    coords.insert(name.clone(), vals);
+                    }
                 }
             }
         }
