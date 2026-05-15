@@ -44,8 +44,23 @@ fn test_read_zarr_schema() -> Result<()> {
     );
     builder.attributes(attributes);
 
-    let array = builder.build(store, "/").unwrap();
+    let array = builder.build(Arc::clone(&store), "/").unwrap();
     array.store_metadata().unwrap();
+
+    // Create a 1D physical coordinate array for `lat`
+    let lat_builder = ArrayBuilder::new(
+        vec![20],
+        DataType::Float32,
+        vec![20].try_into().unwrap(),
+        FillValue::from(0.0f32),
+    );
+    let lat_array = lat_builder.build(Arc::clone(&store), "/lat").unwrap();
+    lat_array.store_metadata().unwrap();
+    // Write physical values to the lat array (e.g. 45.0, 46.0, ...)
+    let lat_data: Vec<f32> = (0..20).map(|i| 45.0 + i as f32).collect();
+    lat_array
+        .store_chunk_elements::<f32>(&[0], &lat_data)
+        .unwrap();
 
     let query = format!("SELECT * FROM read_zarr('{}')", store_path.display());
     let _stmt = conn.prepare(&query).expect("Prepare failed");
@@ -66,6 +81,26 @@ fn test_read_zarr_schema() -> Result<()> {
 
     println!("Columns: {:?}", column_names);
     assert_eq!(column_names, vec!["time", "lat", "value"]);
+
+    // Verify the schema changed to DOUBLE for `lat`
+    let mut info_stmt = conn.prepare(&query_info)?;
+    let mut rows = info_stmt.query([])?;
+
+    let mut column_types = Vec::new();
+    while let Some(row) = rows.next()? {
+        let col_type: String = row.get(1)?; // Column type is the second field in DESCRIBE
+        column_types.push(col_type);
+    }
+    // `time` has no array, so BIGINT. `lat` has array, so DOUBLE. `value` is FLOAT.
+    assert_eq!(column_types, vec!["BIGINT", "DOUBLE", "FLOAT"]);
+
+    // Verify actual physical coordinate is yielded
+    let max_lat: f64 = conn.query_row(
+        &format!("SELECT max(lat) FROM read_zarr('{}')", store_path.display()),
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(max_lat, 64.0); // 45.0 + 19.0
 
     let count: i64 = conn.query_row(
         &format!("SELECT count(*) FROM read_zarr('{}')", store_path.display()),
