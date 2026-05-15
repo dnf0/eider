@@ -1,4 +1,4 @@
-use duckdb::core::{DataChunkHandle, Inserter, LogicalTypeHandle, LogicalTypeId};
+use duckdb::core::{DataChunkHandle, LogicalTypeHandle, LogicalTypeId};
 use duckdb::vtab::{BindInfo, InitInfo, VTab};
 use duckdb::Result;
 use serde_json::Value;
@@ -33,10 +33,30 @@ impl VTab for ReadZarrVTab {
         let path = bind.get_parameter(0).to_string();
 
         let store = FilesystemStore::new(&path).map_err(|e| format!("zarrs error: {}", e))?;
-        let _array =
+        let array =
             Array::open(Arc::new(store), "/").map_err(|e| format!("zarrs error (array): {}", e))?;
 
-        bind.add_result_column("path", LogicalTypeId::Varchar.into());
+        let shape = array.shape();
+        let rank = shape.len();
+        let metadata = array.metadata();
+
+        let dim_names = resolve_dimension_names(metadata, rank);
+
+        // Add coordinate columns (DuckDB integers for now)
+        for name in dim_names {
+            bind.add_result_column(&name, LogicalTypeId::Bigint.into());
+        }
+
+        // Add the value column based on the array's data type
+        let value_type = match array.data_type() {
+            zarrs::array::DataType::Float32 => LogicalTypeId::Float,
+            zarrs::array::DataType::Float64 => LogicalTypeId::Double,
+            zarrs::array::DataType::Int32 => LogicalTypeId::Integer,
+            zarrs::array::DataType::Int64 => LogicalTypeId::Bigint,
+            _ => LogicalTypeId::Varchar, // Fallback
+        };
+        bind.add_result_column("value", value_type.into());
+
         Ok(ReadZarrBindData { path })
     }
 
@@ -50,7 +70,7 @@ impl VTab for ReadZarrVTab {
         func: &duckdb::vtab::TableFunctionInfo<ReadZarrVTab>,
         output: &mut DataChunkHandle,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let bind_data = func.get_bind_data();
+        let _bind_data = func.get_bind_data();
         let init_data = func.get_init_data();
 
         if init_data.done.swap(true, Ordering::SeqCst) {
@@ -58,14 +78,10 @@ impl VTab for ReadZarrVTab {
             return Ok(());
         }
 
-        let vector = output.flat_vector(0);
-        vector.insert(0, bind_data.path.as_str());
-
-        output.set_len(1);
+        output.set_len(0);
         Ok(())
     }
 }
-#[allow(dead_code)]
 fn resolve_dimension_names(metadata: &ArrayMetadata, rank: usize) -> Vec<String> {
     let attributes = match metadata {
         ArrayMetadata::V2(meta) => &meta.attributes,
