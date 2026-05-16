@@ -163,7 +163,7 @@ pub struct ReadZarrBindData {
     pub bounds_min: Vec<u64>,
     pub bounds_max: Vec<u64>,
     pub fill_value_bytes: Option<Vec<u8>>,
-    pub array: std::sync::Arc<zarrs::array::Array<zarrs::storage::store::FilesystemStore>>,
+    pub array: std::sync::Arc<zarrs::array::Array<dyn zarrs::storage::ReadableStorageTraits>>,
 }
 
 pub enum ChunkBuffer {
