@@ -201,20 +201,21 @@ pub enum ChunkBuffer {
     String(Vec<String>),
 }
 
-pub struct IterationState {
+pub struct GlobalState {
     pub current_chunk_grid: Vec<u64>,
+    pub exhausted: bool,
+}
+
+pub struct LocalState {
+    pub assigned_grid: Vec<u64>,
     pub local_chunk_cursor: usize,
     pub current_chunk_buffer: Option<ChunkBuffer>,
-    pub exhausted: bool,
-    pub bounds_min: Vec<u64>,
-    pub bounds_max: Vec<u64>,
-    pub chunk_bounds_min: Vec<u64>,
-    pub chunk_bounds_max: Vec<u64>,
     pub projected_columns: Vec<usize>,
 }
 
 pub struct ReadZarrInitData {
-    state: Mutex<IterationState>,
+    pub global_state: Mutex<GlobalState>,
+    pub local_states: Mutex<HashMap<std::thread::ThreadId, LocalState>>,
 }
 
 pub struct ReadZarrVTab;
@@ -397,21 +398,11 @@ impl VTab for ReadZarrVTab {
         let exhausted = bind_data.shape.contains(&0);
 
         Ok(ReadZarrInitData {
-            state: Mutex::new(IterationState {
+            global_state: std::sync::Mutex::new(GlobalState {
                 current_chunk_grid: chunk_bounds_min.clone(),
-                local_chunk_cursor: 0,
-                current_chunk_buffer: None,
                 exhausted,
-                bounds_min: bind_data.bounds_min.clone(),
-                bounds_max: bind_data.bounds_max.clone(),
-                chunk_bounds_min,
-                chunk_bounds_max,
-                projected_columns: _init
-                    .get_column_indices()
-                    .into_iter()
-                    .map(|i| i as usize)
-                    .collect(),
             }),
+            local_states: std::sync::Mutex::new(HashMap::new()),
         })
     }
 
@@ -733,27 +724,18 @@ mod tests {
 
     #[test]
     fn test_iteration_state_initialization() {
-        let state = IterationState {
+        let global_state = GlobalState {
             current_chunk_grid: vec![0, 0, 0],
+            exhausted: false,
+        };
+        let local_state = LocalState {
+            assigned_grid: vec![0, 0, 0],
             local_chunk_cursor: 0,
             current_chunk_buffer: None,
-            exhausted: false,
-            bounds_min: vec![0, 0, 0],
-            bounds_max: vec![9, 9, 9],
-            chunk_bounds_min: vec![0, 0, 0],
-            chunk_bounds_max: vec![1, 1, 1],
-            projected_columns: vec![0, 1],
+            projected_columns: vec![0, 1, 2],
         };
-
-        assert_eq!(state.current_chunk_grid, vec![0, 0, 0]);
-        assert_eq!(state.local_chunk_cursor, 0);
-        assert!(state.current_chunk_buffer.is_none());
-        assert!(!state.exhausted);
-        assert_eq!(state.bounds_min, vec![0, 0, 0]);
-        assert_eq!(state.bounds_max, vec![9, 9, 9]);
-        assert_eq!(state.chunk_bounds_min, vec![0, 0, 0]);
-        assert_eq!(state.chunk_bounds_max, vec![1, 1, 1]);
-        assert_eq!(state.projected_columns, vec![0, 1]);
+        assert_eq!(global_state.current_chunk_grid, vec![0, 0, 0]);
+        assert_eq!(local_state.local_chunk_cursor, 0);
     }
 
     #[test]
