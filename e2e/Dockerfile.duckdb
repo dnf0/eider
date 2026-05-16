@@ -1,0 +1,14 @@
+FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y curl unzip time
+WORKDIR /duckdb_bin
+RUN ARCH=$(uname -m); \
+    if [ "$ARCH" = "aarch64" ]; then \
+        D_ARCH="aarch64"; \
+    else \
+        D_ARCH="amd64"; \
+    fi && \
+    curl -L -o duckdb.zip "https://github.com/duckdb/duckdb/releases/download/v1.1.1/duckdb_cli-linux-${D_ARCH}.zip" && \
+    unzip duckdb.zip && \
+    rm duckdb.zip
+
+CMD ["sh", "-c", "/usr/bin/time -o /app/e2e_benchmark.txt -v ./duckdb -unsigned -c \"LOAD '/app/target_docker/release/libduckdb_geozarr.so'; SELECT SUM(value) FROM read_zarr('/data/test.zarr');\""]

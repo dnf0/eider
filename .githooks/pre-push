@@ -1,0 +1,21 @@
+#!/bin/bash
+# Pre-push hook to report benchmark results to active PR
+
+BENCHMARK_FILE="e2e_benchmark.md"
+
+if [ -f "$BENCHMARK_FILE" ]; then
+    # Check if we are on a branch with an open PR
+    BRANCH_NAME=$(git branch --show-current)
+    PR_EXISTS=$(gh pr view "$BRANCH_NAME" --json number -q '.number' 2>/dev/null || echo "false")
+    
+    if [ "$PR_EXISTS" != "false" ]; then
+        echo "Posting benchmark to PR #$PR_EXISTS..."
+        gh pr comment "$BRANCH_NAME" --body-file "$BENCHMARK_FILE"
+        echo "Successfully posted benchmark."
+        rm "$BENCHMARK_FILE"
+    else
+        echo "No open PR found for branch $BRANCH_NAME. Skipping benchmark report."
+    fi
+fi
+
+exit 0
