@@ -2,8 +2,9 @@
 set -e
 
 echo "Running E2E Docker Tests..."
+rm -f e2e_benchmark.txt e2e_benchmark.md
 cd e2e
-docker-compose up --build --abort-on-container-exit
+docker compose up --build --abort-on-container-exit
 cd ..
 
 echo "Formatting benchmark results..."
