@@ -13,6 +13,13 @@
       }
     ],
     "@semantic-release/release-notes-generator",
-    "@semantic-release/github"
+    [
+      "@semantic-release/github",
+      {
+        "assets": [
+          {"path": "extension_binaries/*.duckdb_extension", "label": "DuckDB Extension Binary"}
+        ]
+      }
+    ]
   ]
 }
