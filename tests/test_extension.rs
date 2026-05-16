@@ -2,6 +2,67 @@ use duckdb::{Connection, Result};
 use std::path::Path;
 
 #[test]
+fn test_new_data_types() -> Result<()> {
+    let conn = Connection::open_in_memory()?;
+    conn.register_table_function::<geozarr::ReadZarrVTab>("read_zarr")?;
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let store_path = temp_dir.path().join("test_types.zarr");
+
+    use std::sync::Arc;
+    use zarrs::array::{ArrayBuilder, DataType, FillValue};
+    use zarrs::storage::store::FilesystemStore;
+
+    let store = Arc::new(FilesystemStore::new(&store_path).unwrap());
+    
+    // Test Boolean
+    let bool_builder = ArrayBuilder::new(
+        vec![5],
+        DataType::Bool,
+        vec![5].try_into().unwrap(),
+        FillValue::from(false),
+    );
+    let bool_array = bool_builder.build(Arc::clone(&store), "/bool").unwrap();
+    bool_array.store_metadata().unwrap();
+    let bool_data: Vec<bool> = vec![true, false, true, true, false];
+    bool_array.store_chunk_elements(&[0], &bool_data).unwrap();
+
+    let query_bool = format!("SELECT * FROM read_zarr('{}/bool')", store_path.display());
+    let mut stmt_bool = conn.prepare(&query_bool)?;
+    let mut rows_bool = stmt_bool.query([])?;
+    
+    let mut bool_results = Vec::new();
+    while let Some(row) = rows_bool.next()? {
+        bool_results.push(row.get::<_, Option<bool>>(1)?);
+    }
+    assert_eq!(bool_results, vec![Some(true), None, Some(true), Some(true), None]);
+
+    // Test Int8
+    let i8_builder = ArrayBuilder::new(
+        vec![5],
+        DataType::Int8,
+        vec![5].try_into().unwrap(),
+        FillValue::from(0i8),
+    );
+    let i8_array = i8_builder.build(Arc::clone(&store), "/i8").unwrap();
+    i8_array.store_metadata().unwrap();
+    let i8_data: Vec<i8> = vec![-10, 20, -30, 40, -50];
+    i8_array.store_chunk_elements(&[0], &i8_data).unwrap();
+
+    let query_i8 = format!("SELECT * FROM read_zarr('{}/i8')", store_path.display());
+    let mut stmt_i8 = conn.prepare(&query_i8)?;
+    let mut rows_i8 = stmt_i8.query([])?;
+    
+    let mut i8_results = Vec::new();
+    while let Some(row) = rows_i8.next()? {
+        i8_results.push(row.get::<_, i8>(1)?);
+    }
+    assert_eq!(i8_results, vec![-10, 20, -30, 40, -50]);
+
+    Ok(())
+}
+
+#[test]
 fn test_read_zarr_function_compiles() {
     let ext_path = "target/debug/duckdb_geozarr.duckdb_extension";
 

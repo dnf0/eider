@@ -59,6 +59,13 @@ impl_fill_value_cmp!(u16);
 impl_fill_value_cmp!(u32);
 impl_fill_value_cmp!(u64);
 
+impl FillValueCmp for bool {
+    fn is_fill_value(&self, fill_bytes: &[u8]) -> bool {
+        let b = if *self { 1u8 } else { 0u8 };
+        [b].as_ref() == fill_bytes
+    }
+}
+
 macro_rules! dispatch_yield_loop {
     ($rust_type:ty, $enum_variant:path, $output:expr, $local_state:expr, $global_state:expr, $bind_data:expr) => {{
         let rank = $bind_data.shape.len();
@@ -211,6 +218,13 @@ pub enum ChunkBuffer {
     Int32(Vec<i32>),
     Int64(Vec<i64>),
     String(Vec<String>),
+    Bool(Vec<bool>),
+    Int8(Vec<i8>),
+    Int16(Vec<i16>),
+    UInt8(Vec<u8>),
+    UInt16(Vec<u16>),
+    UInt32(Vec<u32>),
+    UInt64(Vec<u64>),
 }
 
 pub struct GlobalState {
@@ -319,7 +333,15 @@ impl VTab for ReadZarrVTab {
             DataType::Float64 => LogicalTypeId::Double,
             DataType::Int32 => LogicalTypeId::Integer,
             DataType::Int64 => LogicalTypeId::Bigint,
-            _ => LogicalTypeId::Varchar, // Fallback
+            DataType::String => LogicalTypeId::Varchar,
+            DataType::Bool => LogicalTypeId::Boolean,
+            DataType::Int8 => LogicalTypeId::Tinyint,
+            DataType::Int16 => LogicalTypeId::Smallint,
+            DataType::UInt8 => LogicalTypeId::UTinyint,
+            DataType::UInt16 => LogicalTypeId::USmallint,
+            DataType::UInt32 => LogicalTypeId::UInteger,
+            DataType::UInt64 => LogicalTypeId::UBigint,
+            _ => return Err(format!("Unsupported data type: {:?}", array.data_type()).into()),
         };
         bind.add_result_column("value", value_type.into());
 
@@ -603,6 +625,27 @@ impl VTab for ReadZarrVTab {
                 }
 
                 output.set_len(valid_rows);
+            }
+            zarrs::array::DataType::Bool => {
+                dispatch_yield_loop!(bool, ChunkBuffer::Bool, output, local_state, &init_data.global_state, bind_data)
+            }
+            zarrs::array::DataType::Int8 => {
+                dispatch_yield_loop!(i8, ChunkBuffer::Int8, output, local_state, &init_data.global_state, bind_data)
+            }
+            zarrs::array::DataType::Int16 => {
+                dispatch_yield_loop!(i16, ChunkBuffer::Int16, output, local_state, &init_data.global_state, bind_data)
+            }
+            zarrs::array::DataType::UInt8 => {
+                dispatch_yield_loop!(u8, ChunkBuffer::UInt8, output, local_state, &init_data.global_state, bind_data)
+            }
+            zarrs::array::DataType::UInt16 => {
+                dispatch_yield_loop!(u16, ChunkBuffer::UInt16, output, local_state, &init_data.global_state, bind_data)
+            }
+            zarrs::array::DataType::UInt32 => {
+                dispatch_yield_loop!(u32, ChunkBuffer::UInt32, output, local_state, &init_data.global_state, bind_data)
+            }
+            zarrs::array::DataType::UInt64 => {
+                dispatch_yield_loop!(u64, ChunkBuffer::UInt64, output, local_state, &init_data.global_state, bind_data)
             }
             _ => return Err(format!("Unsupported data type: {:?}", bind_data.data_type).into()),
         }
