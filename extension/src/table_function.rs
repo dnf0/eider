@@ -28,6 +28,11 @@ fn resolve_store(
         let store = zarrs::storage::store::OpendalStore::new(operator.blocking());
         Ok(Arc::new(store))
     } else {
+        let canonical_path = std::fs::canonicalize(path).map_err(|e| format!("Invalid path: {}", e))?;
+        let path_str = canonical_path.to_string_lossy();
+        if path_str.contains("/etc/") || path_str.contains("/var/") || path_str.contains("/dev/") || path_str.contains("/.ssh/") {
+            return Err("Access to sensitive system directories is forbidden".into());
+        }
         let store = zarrs::storage::store::FilesystemStore::new(path)?;
         Ok(Arc::new(store))
     }
