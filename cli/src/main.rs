@@ -9,6 +9,11 @@ struct Cli {
     command: Commands,
 }
 
+enum ChunkData {
+    F32(Vec<f32>),
+    F64(Vec<f64>),
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Export the results of a SQL query to a Zarr array
@@ -144,18 +149,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             if let Some(_c) = chunks {
                 // Simplified chunk parsing fallback
-                println!("Chunk parsing not fully implemented, using auto-chunking: {:?}", chunk_shape);
+                println!(
+                    "Chunk parsing not fully implemented, using auto-chunking: {:?}",
+                    chunk_shape
+                );
             }
 
-            if chunk_shape.iter().any(|&dim| dim == 0) {
+            if chunk_shape.contains(&0) {
                 return Err("Chunk dimension size cannot be 0".into());
             }
 
+            // Infer type from DuckDB schema
+            let mut type_stmt = _conn.prepare(&query_info)?;
+            let mut t_rows = type_stmt.query([])?;
+            let mut value_type_str = "FLOAT".to_string();
+            while let Some(row) = t_rows.next()? {
+                let col_name: String = row.get(0)?;
+                if col_name == value_column {
+                    value_type_str = row.get(1)?;
+                }
+            }
+
+            let data_type = if value_type_str == "DOUBLE" {
+                zarrs::array::DataType::Float64
+            } else {
+                zarrs::array::DataType::Float32
+            };
+
+            let fill_value = if value_type_str == "DOUBLE" {
+                zarrs::array::FillValue::from(f64::NAN)
+            } else {
+                zarrs::array::FillValue::from(f32::NAN)
+            };
+
             let array_builder = zarrs::array::ArrayBuilder::new(
                 shape.clone(),
-                zarrs::array::DataType::Float32,
+                data_type,
                 chunk_shape.clone().try_into().unwrap(),
-                zarrs::array::FillValue::from(f32::NAN),
+                fill_value,
             );
 
             let array = array_builder.build(store.clone(), "/").unwrap();
@@ -166,21 +197,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // 4. Setup Async Upload Workers
             println!("Pass 2: Streaming data...");
-            let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u64>, Vec<f32>)>(16);
+            let (tx, mut rx) = tokio::sync::mpsc::channel::<(Vec<u64>, ChunkData)>(16);
             let array_clone = array.clone();
 
             let upload_task = tokio::spawn(async move {
                 while let Some((chunk_grid, chunk_data)) = rx.recv().await {
-                    if let Err(e) = array_clone.async_store_chunk_elements(&chunk_grid, &chunk_data).await {
+                    let res = match chunk_data {
+                        ChunkData::F32(data) => {
+                            array_clone
+                                .async_store_chunk_elements(&chunk_grid, &data)
+                                .await
+                        }
+                        ChunkData::F64(data) => {
+                            array_clone
+                                .async_store_chunk_elements(&chunk_grid, &data)
+                                .await
+                        }
+                    };
+                    if let Err(e) = res {
                         eprintln!("Failed to upload chunk: {}", e);
                         std::process::exit(1);
                     }
                 }
             });
 
-            let mut active_chunks: std::collections::HashMap<Vec<u64>, Vec<f32>> =
+            let mut active_chunks: std::collections::HashMap<Vec<u64>, ChunkData> =
                 std::collections::HashMap::new();
-            let chunk_len = chunk_shape.iter().try_fold(1u64, |acc, &x| acc.checked_mul(x)).ok_or("Chunk volume overflow")? as usize;
+            let chunk_len = chunk_shape
+                .iter()
+                .try_fold(1u64, |acc, &x| acc.checked_mul(x))
+                .ok_or("Chunk volume overflow")? as usize;
 
             // 5. Stream data from DuckDB
             let order_by = coord_columns
@@ -195,7 +241,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .join(", ");
             let stream_query = format!(
                 "SELECT {}, \"{}\" FROM ({}) ORDER BY {}",
-                coords_str, value_column.replace("\"", "\"\""), query, order_by
+                coords_str,
+                value_column.replace("\"", "\"\""),
+                query,
+                order_by
             );
             let mut stream_stmt = _conn.prepare(&stream_query)?;
 
@@ -205,31 +254,58 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             while let Some(row) = rows.next()? {
                 // Map the flat row to a chunk grid coordinate
                 let mut grid_coord = Vec::new();
-                for i in 0..coord_columns.len() {
+                for (i, &chunk_dim) in chunk_shape.iter().enumerate().take(coord_columns.len()) {
                     let val: i64 = row.get(i)?;
                     if val < 0 {
                         return Err("Coordinates must be positive 0-based integer indices".into());
                     }
-                    let grid_idx = (val as u64) / chunk_shape[i];
+                    let grid_idx = (val as u64) / chunk_dim;
                     grid_coord.push(grid_idx);
                 }
 
-                // Get the value (assuming f32 for this MVP)
-                let value: f32 = row.get(coord_columns.len())?;
+                let is_double = value_type_str == "DOUBLE";
 
-                if !active_chunks.contains_key(&grid_coord) {
-                    active_chunks.insert(grid_coord.clone(), Vec::with_capacity(chunk_len));
-                }
-                let buffer = active_chunks.get_mut(&grid_coord).unwrap();
-                buffer.push(value);
+                let buffer = active_chunks.entry(grid_coord.clone()).or_insert_with(|| {
+                    if is_double {
+                        let mut b = Vec::with_capacity(chunk_len);
+                        b.resize(chunk_len, f64::NAN);
+                        ChunkData::F64(b)
+                    } else {
+                        let mut b = Vec::with_capacity(chunk_len);
+                        b.resize(chunk_len, f32::NAN);
+                        ChunkData::F32(b)
+                    }
+                });
 
-                // Flush if full
-                if buffer.len() == chunk_len {
-                    let full_chunk = active_chunks.remove(&grid_coord).unwrap();
-                    tx.send((grid_coord, full_chunk))
-                        .await
-                        .map_err(|_| "Upload worker failed or disconnected")?;
+                // Calculate local coordinates and flat C-contiguous index
+                let mut local_coords = Vec::new();
+                for (i, &chunk_dim) in chunk_shape.iter().enumerate().take(coord_columns.len()) {
+                    let val: i64 = row.get(i)?; // val has already been validated >= 0 above
+                    let local_c = (val as u64) % chunk_dim;
+                    local_coords.push(local_c);
                 }
+
+                let mut flat_idx = 0;
+                let mut stride = 1;
+                for i in (0..coord_columns.len()).rev() {
+                    flat_idx += local_coords[i] * stride;
+                    stride *= chunk_shape[i];
+                }
+
+                match buffer {
+                    ChunkData::F32(b) => {
+                        let value: f32 = row.get(coord_columns.len())?;
+                        b[flat_idx as usize] = value;
+                    }
+                    ChunkData::F64(b) => {
+                        let value: f64 = row.get(coord_columns.len())?;
+                        b[flat_idx as usize] = value;
+                    }
+                }
+
+                // Note: Eviction will handle flushing. For MVP, we don't attempt to track "fullness"
+                // perfectly since sparse arrays won't fill up linearly.
+                // The eviction logic below will flush chunks when the active map gets too large.
 
                 // Eviction check for sparse chunks
                 if active_chunks.len() >= 1000 {
@@ -237,17 +313,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let mut smallest_key = None;
                     let mut smallest_len = usize::MAX;
                     for (k, v) in active_chunks.iter() {
-                        if v.len() < smallest_len {
-                            smallest_len = v.len();
+                        let len = match v {
+                            ChunkData::F32(b) => b.len(),
+                            ChunkData::F64(b) => b.len(),
+                        };
+                        if len < smallest_len {
+                            smallest_len = len;
                             smallest_key = Some(k.clone());
                         }
                     }
                     if let Some(key) = smallest_key {
-                        let mut evicted_buffer = active_chunks.remove(&key).unwrap();
-                        while evicted_buffer.len() < chunk_len {
-                            evicted_buffer.push(f32::NAN);
-                        }
-                        tx.send((key, evicted_buffer)).await.map_err(|_| "Upload worker failed or disconnected")?;
+                        let evicted_buffer = active_chunks.remove(&key).unwrap();
+                        tx.send((key, evicted_buffer))
+                            .await
+                            .map_err(|_| "Upload worker failed or disconnected")?;
                     }
                 }
 
@@ -258,11 +337,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // 6. Flush remaining edge chunks
-            for (grid_coord, mut buffer) in active_chunks.into_iter() {
-                // Pad with fill_value
-                while buffer.len() < chunk_len {
-                    buffer.push(f32::NAN);
-                }
+            for (grid_coord, buffer) in active_chunks.into_iter() {
                 tx.send((grid_coord, buffer))
                     .await
                     .map_err(|_| "Upload worker failed or disconnected")?;

@@ -28,23 +28,16 @@ fn resolve_store(
         let store = zarrs::storage::store::OpendalStore::new(operator.blocking());
         Ok(Arc::new(store))
     } else {
-        let canonical_path = std::fs::canonicalize(path).map_err(|e| format!("Invalid path: {}", e))?;
-        // Check if an allowed base directory is configured
-        if let Ok(allowed_dir) = std::env::var("GEOZARR_ALLOW_PATH") {
-            let allowed_canon = std::fs::canonicalize(&allowed_dir).map_err(|e| format!("Invalid GEOZARR_ALLOW_PATH: {}", e))?;
-            if !canonical_path.starts_with(allowed_canon) {
-                return Err("Access denied. Path is not within GEOZARR_ALLOW_PATH".into());
-            }
-        } else {
-            // Strict denylist by path component to prevent bypasses
-            for component in canonical_path.components() {
-                if let std::path::Component::Normal(name) = component {
-                    let name_str = name.to_string_lossy();
-                    if name_str == "etc" || name_str == "var" || name_str == "dev" || name_str == ".ssh" || name_str == ".aws" {
-                        return Err("Access to sensitive system directories is forbidden".into());
-                    }
-                }
-            }
+        let canonical_path =
+            std::fs::canonicalize(path).map_err(|e| format!("Invalid path: {}", e))?;
+        let allowed_dir = std::env::var("GEOZARR_ALLOW_PATH")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+
+        let allowed_canon = std::fs::canonicalize(&allowed_dir)
+            .map_err(|e| format!("Invalid GEOZARR_ALLOW_PATH: {}", e))?;
+        if !canonical_path.starts_with(allowed_canon) {
+            return Err("Access denied. Path is not within the allowed sandbox directory (GEOZARR_ALLOW_PATH or CWD).".into());
         }
         let store = zarrs::storage::store::FilesystemStore::new(path)?;
         Ok(Arc::new(store))
@@ -140,7 +133,11 @@ macro_rules! dispatch_yield_loop {
                 _ => return Err("Chunk buffer type mismatch".into()),
             };
 
-            let chunk_len = $bind_data.chunk_shape.iter().try_fold(1u64, |acc, &x| acc.checked_mul(x)).ok_or("Chunk volume overflow")? as usize;
+            let chunk_len = $bind_data
+                .chunk_shape
+                .iter()
+                .try_fold(1u64, |acc, &x| acc.checked_mul(x))
+                .ok_or("Chunk volume overflow")? as usize;
             let elements_remaining = chunk_len - $local_state.local_chunk_cursor;
             let batch_size = std::cmp::min(2048, elements_remaining);
 
@@ -191,12 +188,16 @@ macro_rules! dispatch_yield_loop {
                 {
                     let value_slice = value_vector.as_mut_slice::<$rust_type>();
                     for (idx, (local_idx, _)) in valid_coords.iter().enumerate() {
-                        let val = buffer.get(*local_idx).ok_or_else(|| "Malformed Zarr chunk: unexpected buffer size")?;
+                        let val = buffer
+                            .get(*local_idx)
+                            .ok_or_else(|| "Malformed Zarr chunk: unexpected buffer size")?;
                         value_slice[valid_rows + idx] = *val;
                     }
                 }
                 for (idx, (local_idx, _)) in valid_coords.iter().enumerate() {
-                    let val = buffer.get(*local_idx).ok_or_else(|| "Malformed Zarr chunk: unexpected buffer size")?;
+                    let val = buffer
+                        .get(*local_idx)
+                        .ok_or_else(|| "Malformed Zarr chunk: unexpected buffer size")?;
                     let val = *val;
                     if val.is_fill_value(fill_bytes_slice) {
                         value_vector.set_null(valid_rows + idx);
@@ -301,6 +302,9 @@ impl VTab for ReadZarrVTab {
 
         let shape = array.shape();
         let rank = shape.len();
+        if rank > 16 {
+            return Err(format!("Zarr array rank {} exceeds maximum supported dimensions (16)", rank).into());
+        }
         let metadata = array.metadata();
 
         let dim_names = resolve_dimension_names(metadata, rank);
@@ -370,6 +374,7 @@ impl VTab for ReadZarrVTab {
         bind.add_result_column("value", value_type.into());
 
         let shape = array.shape().to_vec();
+        let rank = shape.len();
         let chunk_shape: Vec<u64> = array
             .chunk_grid()
             .chunk_shape(&vec![0; rank], &shape)
@@ -380,20 +385,33 @@ impl VTab for ReadZarrVTab {
             .collect();
         let data_type = array.data_type().clone();
 
-        if chunk_shape.iter().any(|&dim| dim == 0) {
+        if chunk_shape.contains(&0) {
             return Err("Chunk dimension size cannot be 0".into());
         }
 
-        let chunk_volume = chunk_shape.iter().try_fold(1u64, |acc, &x| acc.checked_mul(x)).ok_or("Chunk volume overflow")?;
+        let chunk_volume = chunk_shape
+            .iter()
+            .try_fold(1u64, |acc, &x| acc.checked_mul(x))
+            .ok_or("Chunk volume overflow")?;
         let bytes_per_element = match data_type {
-            zarrs::array::DataType::Float64 | zarrs::array::DataType::Int64 | zarrs::array::DataType::UInt64 => 8,
-            zarrs::array::DataType::Float32 | zarrs::array::DataType::Int32 | zarrs::array::DataType::UInt32 => 4,
+            zarrs::array::DataType::Float64
+            | zarrs::array::DataType::Int64
+            | zarrs::array::DataType::UInt64 => 8,
+            zarrs::array::DataType::Float32
+            | zarrs::array::DataType::Int32
+            | zarrs::array::DataType::UInt32 => 4,
             zarrs::array::DataType::Int16 | zarrs::array::DataType::UInt16 => 2,
             _ => 1,
         };
-        let chunk_bytes = chunk_volume.checked_mul(bytes_per_element).ok_or("Chunk byte volume overflow")?;
+        let chunk_bytes = chunk_volume
+            .checked_mul(bytes_per_element)
+            .ok_or("Chunk byte volume overflow")?;
         if chunk_bytes > 256 * 1024 * 1024 {
-            return Err(format!("Chunk size {} bytes exceeds maximum allowed volume of 256MB", chunk_bytes).into());
+            return Err(format!(
+                "Chunk size {} bytes exceeds maximum allowed volume of 256MB",
+                chunk_bytes
+            )
+            .into());
         }
 
         let mut bounds_min = vec![0; rank];
@@ -501,10 +519,7 @@ impl VTab for ReadZarrVTab {
                 .map_err(|e| format!("Mutex poisoned: {}", e))?;
 
             local_states.remove(&thread_id).unwrap_or_else(|| {
-                let mut g_state = init_data
-                    .global_state
-                    .lock()
-                    .unwrap();
+                let mut g_state = init_data.global_state.lock().unwrap();
 
                 // Initialize current_chunk_grid properly on first run
                 if g_state.current_chunk_grid.len() != bind_data.shape.len() {
@@ -617,7 +632,12 @@ impl VTab for ReadZarrVTab {
                         _ => return Err("Chunk buffer type mismatch".into()),
                     };
 
-                    let chunk_len = bind_data.chunk_shape.iter().try_fold(1u64, |acc, &x| acc.checked_mul(x)).ok_or("Chunk volume overflow")? as usize;
+                    let chunk_len = bind_data
+                        .chunk_shape
+                        .iter()
+                        .try_fold(1u64, |acc, &x| acc.checked_mul(x))
+                        .ok_or("Chunk volume overflow")?
+                        as usize;
                     let elements_remaining = chunk_len - local_state.local_chunk_cursor;
                     let batch_size = std::cmp::min(2048, elements_remaining);
 
@@ -667,7 +687,9 @@ impl VTab for ReadZarrVTab {
 
                     if local_state.projected_columns.contains(&rank) {
                         for (idx, (local_idx, _)) in valid_coords.iter().enumerate() {
-                            let val = buffer.get(*local_idx).ok_or_else(|| "Malformed Zarr chunk: unexpected buffer size")?;
+                            let val = buffer
+                                .get(*local_idx)
+                                .ok_or("Malformed Zarr chunk: unexpected buffer size")?;
                             if Some(val.as_bytes()) == bind_data.fill_value_bytes.as_deref() {
                                 value_vector.set_null(valid_rows + idx);
                             } else {
@@ -814,7 +836,7 @@ fn calculate_global_indices(
     // Add global chunk offset
     let mut global_coords = vec![0; rank];
     for i in 0..rank {
-        global_coords[i] = (chunk_grid[i] * chunk_shape[i]) + local_coords[i];
+        global_coords[i] = chunk_grid[i].saturating_mul(chunk_shape[i]).saturating_add(local_coords[i]);
     }
 
     global_coords
