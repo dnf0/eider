@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .join(", ");
             let stream_query = format!(
                 "SELECT {}, \"{}\" FROM ({}) ORDER BY {}",
-                coords_str, value_column, query, order_by
+                coords_str, value_column.replace("\"", "\"\""), query, order_by
             );
             let mut stream_stmt = _conn.prepare(&stream_query)?;
 
