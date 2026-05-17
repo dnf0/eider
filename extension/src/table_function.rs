@@ -749,6 +749,12 @@ impl VTab for ReadZarrVTab {
             _ => return Err(format!("Unsupported data type: {:?}", bind_data.data_type).into()),
         }
 
+        let mut local_states = init_data
+            .local_states
+            .lock()
+            .map_err(|e| format!("Mutex poisoned: {}", e))?;
+        local_states.insert(thread_id, local_state);
+
         Ok(())
     }
 }
