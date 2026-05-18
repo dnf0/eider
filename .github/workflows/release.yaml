@@ -39,7 +39,18 @@ jobs:
           cargo fetch
           FILE=$(find ~/.cargo/registry -path "*/duckdb-1.10502.0/src/core/logical_type.rs" | head -n 1)
           if [ -n "$FILE" ]; then
-            python -c "import re, sys; path = sys.argv[1]; code = open(path).read(); code = re.sub(r'(DUCKDB_TYPE_DUCKDB_TYPE_[A-Z0-9_]+)', r'\1 as u32', code); code = code.replace('duckdb_create_logical_type(id as u32)', 'duckdb_create_logical_type((id as u32).try_into().unwrap())'); code = code.replace('duckdb_get_type_id(self.ptr)', 'duckdb_get_type_id(self.ptr).try_into().unwrap()'); open(path, 'w').write(code)" "$FILE"
+            cat << 'EOF' > patch.py
+import sys, re
+code = open(sys.argv[1]).read()
+code = code.replace('match value {', 'match value as i32 {')
+code = re.sub(r'(= DUCKDB_TYPE_DUCKDB_TYPE_[A-Z0-9_]+),', r'\1 as u32,', code)
+code = code.replace('duckdb_create_logical_type(id as u32)', 'duckdb_create_logical_type((id as u32).try_into().unwrap())')
+code = code.replace('duckdb_get_type_id(self.ptr)', 'duckdb_get_type_id(self.ptr).try_into().unwrap()')
+code = code.replace('duckdb_create_logical_type(DUCKDB_TYPE_DUCKDB_TYPE_INVALID)', 'duckdb_create_logical_type((DUCKDB_TYPE_DUCKDB_TYPE_INVALID as i32).try_into().unwrap())')
+code = code.replace('raw_id(), DUCKDB_TYPE_DUCKDB_TYPE_INVALID)', 'raw_id(), DUCKDB_TYPE_DUCKDB_TYPE_INVALID as u32)')
+open(sys.argv[1], 'w').write(code)
+EOF
+            python patch.py "$FILE"
             echo "Patched $FILE"
           else
             echo "logical_type.rs not found!"
