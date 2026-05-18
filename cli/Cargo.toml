@@ -11,6 +11,7 @@ opendal = { version = "0.48", features = ["services-s3", "services-http", "servi
 zarrs = { version = "0.16.4", features = ["opendal", "async"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+color-eyre = "0.6"
 
 [dev-dependencies]
 assert_cmd = "2.0"

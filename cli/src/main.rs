@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use duckdb::{Connection, Result};
 use std::process::Command;
+use color_eyre::eyre::{eyre, WrapErr, Result as EyreResult};
 
 #[derive(Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum OutputFormat {
@@ -91,7 +92,7 @@ fn load_geozarr_extension(conn: &Connection) -> Result<(), duckdb::Error> {
     Ok(())
 }
 
-fn setup_duckdb() -> Result<Connection, Box<dyn std::error::Error>> {
+fn setup_duckdb() -> EyreResult<Connection> {
     let config = duckdb::Config::default().allow_unsigned_extensions()?;
     let conn = Connection::open_in_memory_with_flags(config)?;
     
@@ -101,8 +102,32 @@ fn setup_duckdb() -> Result<Connection, Box<dyn std::error::Error>> {
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn main() -> EyreResult<()> {
+    color_eyre::install()?;
     let cli = Cli::parse();
+    
+    let is_json = cli.output == OutputFormat::Json;
+    
+    if let Err(e) = run_cli(cli).await {
+        if is_json {
+            // Build error chain string
+            let error_msgs: Vec<String> = e.chain().map(|c| c.to_string()).collect();
+            let json_err = serde_json::json!({
+                "status": "error",
+                "message": error_msgs.join(": ")
+            });
+            println!("{}", json_err.to_string());
+            std::process::exit(1);
+        } else {
+            // Return error to let color-eyre format it
+            return Err(e);
+        }
+    }
+    
+    Ok(())
+}
+
+async fn run_cli(cli: Cli) -> EyreResult<()> {
 
     match cli.command {
         Commands::Info { uri } => {
@@ -246,7 +271,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if !all_columns.contains(&value_column) {
                 return Err(
-                    format!("Value column '{}' not found in query results", value_column).into(),
+                    eyre!("Value column '{}' not found in query results", value_column),
                 );
             }
 
@@ -318,7 +343,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             if chunk_shape.contains(&0) {
-                return Err("Chunk dimension size cannot be 0".into());
+                return Err(eyre!("Chunk dimension size cannot be 0"));
             }
 
             // Infer type from DuckDB schema
@@ -345,7 +370,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 "FLOAT" | "REAL" => zarrs::array::DataType::Float32,
                 "DOUBLE" | "FLOAT8" | "DECIMAL" | "NUMERIC" => zarrs::array::DataType::Float64,
                 "VARCHAR" => zarrs::array::DataType::String,
-                _ => return Err(format!("Unsupported DuckDB type: {}", value_type_str).into()),
+                _ => return Err(eyre!("Unsupported DuckDB type: {}", value_type_str)),
             };
 
             let fill_value = match data_type {
@@ -361,7 +386,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 zarrs::array::DataType::Float32 => zarrs::array::FillValue::from(f32::NAN),
                 zarrs::array::DataType::Float64 => zarrs::array::FillValue::from(f64::NAN),
                 zarrs::array::DataType::String => zarrs::array::FillValue::from(""),
-                _ => return Err("Unsupported DataType for FillValue".into()),
+                _ => return Err(eyre!("Unsupported DataType for FillValue")),
             };
 
             let array_builder = zarrs::array::ArrayBuilder::new(
@@ -458,7 +483,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let chunk_len = chunk_shape
                 .iter()
                 .try_fold(1u64, |acc, &x| acc.checked_mul(x))
-                .ok_or("Chunk volume overflow")? as usize;
+                .ok_or_else(|| eyre!("Chunk volume overflow"))? as usize;
 
             let bytes_per_element = match data_type {
                 zarrs::array::DataType::Float64
@@ -473,7 +498,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             let chunk_byte_size = chunk_len
                 .checked_mul(bytes_per_element)
-                .ok_or("Chunk byte size overflow")?;
+                .ok_or_else(|| eyre!("Chunk byte size overflow"))?;
             let max_memory_bytes = 512 * 1024 * 1024; // 512 MB
 
             // 5. Stream data from DuckDB
@@ -509,7 +534,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let mut rows = stream_stmt.query([])?;
             let mut row_count = 0;
 
-            let stream_result: Result<(), Box<dyn std::error::Error>> = (|| {
+            let stream_result: EyreResult<()> = (|| {
                 while let Some(row) = rows.next()? {
                     let mut grid_coord = Vec::new();
                     for (i, &chunk_dim) in chunk_shape.iter().enumerate().take(coord_columns.len())
@@ -517,15 +542,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let val: i64 = row.get(i)?;
                         if val < 0 {
                             return Err(
-                                "Coordinates must be positive 0-based integer indices".into()
+                                eyre!("Coordinates must be positive 0-based integer indices")
                             );
                         }
                         if (val as u64) >= shape[i] {
-                            return Err(format!(
+                            return Err(eyre!(
                                 "Coordinate index {} exceeds maximum bound of dimension {}",
                                 val, shape[i]
-                            )
-                            .into());
+                            ));
                         }
                         let grid_idx = (val as u64) / chunk_dim;
                         grid_coord.push(grid_idx);
@@ -698,7 +722,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 }
                             }
                         }
-                        _ => return Err("Unsupported DataType".into()),
+                        _ => return Err(eyre!("Unsupported DataType")),
                     }
 
                     // Eviction check for sparse chunks
@@ -709,7 +733,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         tokio::task::block_in_place(move || {
                             tx_clone
                                 .blocking_send((oldest_key, evicted_buffer))
-                                .map_err(|_| "Upload worker failed or disconnected")
+                                .map_err(|_| eyre!("Upload worker failed or disconnected"))
                         })?;
                     }
 
@@ -731,7 +755,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // 7. Wait for uploads to finish
             upload_task
                 .await
-                .map_err(|e| format!("Upload task panicked: {}", e))?;
+                .map_err(|e| eyre!("Upload task panicked: {}", e))?;
 
             // If the stream encountered an error, propagate it now
             stream_result?;
