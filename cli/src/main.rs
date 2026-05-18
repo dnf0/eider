@@ -82,22 +82,26 @@ enum Commands {
     },
 }
 
-fn load_geozarr_extension(conn: &Connection) -> Result<(), duckdb::Error> {
+fn load_geozarr_extension(conn: &Connection) -> EyreResult<()> {
     let ext_path = if cfg!(target_os = "windows") {
         "../target/debug/geozarr.duckdb_extension"
     } else {
         "../target/debug/libgeozarr.duckdb_extension"
     };
-    conn.execute(&format!("LOAD '{}'", ext_path), [])?;
+    conn.execute(&format!("LOAD '{}'", ext_path), [])
+        .wrap_err_with(|| format!("Failed to load extension at {}", ext_path))?;
     Ok(())
 }
 
 fn setup_duckdb() -> EyreResult<Connection> {
-    let config = duckdb::Config::default().allow_unsigned_extensions()?;
-    let conn = Connection::open_in_memory_with_flags(config)?;
-    
-    load_geozarr_extension(&conn)?;
-    
+    let config = duckdb::Config::default().allow_unsigned_extensions()
+        .wrap_err("Failed to configure unsigned extensions")?;
+    let conn = Connection::open_in_memory_with_flags(config)
+        .wrap_err("Failed to open in-memory DuckDB connection")?;
+
+    load_geozarr_extension(&conn)
+        .wrap_err("Failed to load geozarr extension")?;
+
     Ok(conn)
 }
 
@@ -163,13 +167,14 @@ async fn run_cli(cli: Cli) -> EyreResult<()> {
                     println!("CRS: {}", crs);
                 }
             } else {
-                eprintln!("Failed to read metadata for {}", uri);
-                std::process::exit(1);
+                return Err(eyre!("Failed to read metadata for {}", uri));
             }
         }
         Commands::Extract { zarr_uri, vector_path, out } => {
-            let config = duckdb::Config::default().allow_unsigned_extensions()?;
-            let conn = Connection::open_with_flags(&out, config)?;
+            let config = duckdb::Config::default().allow_unsigned_extensions()
+                .wrap_err("Failed to configure unsigned extensions")?;
+            let conn = Connection::open_with_flags(&out, config)
+                .wrap_err_with(|| format!("Failed to open database at {}", out))?;
             
             // Load extensions
             load_geozarr_extension(&conn)?;
@@ -178,8 +183,8 @@ async fn run_cli(cli: Cli) -> EyreResult<()> {
             if cli.output != OutputFormat::Json {
                 println!("Loading DuckDB spatial extension...");
             }
-            conn.execute("INSTALL spatial", [])?;
-            conn.execute("LOAD spatial", [])?;
+            conn.execute("INSTALL spatial", []).wrap_err("Failed to install spatial extension")?;
+            conn.execute("LOAD spatial", []).wrap_err("Failed to load spatial extension")?;
             
             if cli.output != OutputFormat::Json {
                 println!("Extracting data... This may take a while depending on the bounding box.");
@@ -191,20 +196,13 @@ async fn run_cli(cli: Cli) -> EyreResult<()> {
                 zarr_uri.replace("'", "''"), vector_path.replace("'", "''")
             );
             
-            match conn.execute(&query, []) {
-                Ok(_) => {
-                    // NOTE: Use OutputFormat::Json from Task 1
-                    if cli.output == OutputFormat::Json {
-                        println!(r#"{{"status": "success", "db": "{}"}}"#, out);
-                    } else {
-                        println!("Extraction complete! Data saved to table 'extracted_data' in {}", out);
-                        println!("Run `zarrduck shell {}` to explore it.", out);
-                    }
-                },
-                Err(e) => {
-                    eprintln!("Extraction failed: {}", e);
-                    std::process::exit(1);
-                }
+            conn.execute(&query, []).wrap_err("Spatial extraction query failed")?;
+            
+            if cli.output == OutputFormat::Json {
+                println!(r#"{{"status": "success", "db": "{}"}}"#, out);
+            } else {
+                println!("Extraction complete! Data saved to table 'extracted_data' in {}", out);
+                println!("Run `zarrduck shell {}` to explore it.", out);
             }
         }
         Commands::Shell { db_path } => {
