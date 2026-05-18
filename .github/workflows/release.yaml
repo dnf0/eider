@@ -33,13 +33,22 @@ jobs:
         run: cargo install cargo-duckdb-ext-tools
 
       - name: Build Extension
-        run: cargo duckdb-ext build -- --package duckdb_geozarr --release
+        shell: bash
+        run: |
+          if [ "${{ matrix.os }}" == "windows-latest" ]; then
+            cargo build --package duckdb_geozarr --release
+            cargo duckdb-ext package --library-path target/release/geozarr.dll --extension-path target/release/${{ matrix.artifact_name }} --extension-version v0.1.0 --duckdb-platform windows_amd64 --duckdb-version v1.10502.0
+          else
+            cargo duckdb-ext build -- --package duckdb_geozarr --release
+          fi
 
       - name: Rename Artifact
         shell: bash
         run: |
-          ls -la target/release/ || true
-          mv target/release/*.duckdb_extension target/release/${{ matrix.artifact_name }}
+          if [ "${{ matrix.os }}" != "windows-latest" ]; then
+            ls -la target/release/ || true
+            mv target/release/*.duckdb_extension target/release/${{ matrix.artifact_name }}
+          fi
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
