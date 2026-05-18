@@ -138,8 +138,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Extract { zarr_uri, vector_path, out } => {
-            println!("Extracting {} using {} to {}", zarr_uri, vector_path, out);
-            // TODO in Task 3
+            let conn = Connection::open(&out)?;
+            
+            // Load extensions
+            conn.execute("SET allow_unsigned_extensions = true", [])?;
+            let ext_path = if cfg!(target_os = "windows") {
+                "../target/debug/geozarr.duckdb_extension"
+            } else {
+                "../target/debug/libgeozarr.duckdb_extension"
+            };
+            conn.execute(&format!("LOAD '{}'", ext_path), [])?;
+            
+            // Install and load official spatial extension
+            println!("Loading DuckDB spatial extension...");
+            conn.execute("INSTALL spatial", [])?;
+            conn.execute("LOAD spatial", [])?;
+            
+            println!("Extracting data... This may take a while depending on the bounding box.");
+            
+            // The magic query: Create a table by joining the GeoZarr pixels that intersect the vector polygons
+            let query = format!(
+                "CREATE TABLE extracted_data AS \n                 SELECT z.*, v.* EXCLUDE (geom) \n                 FROM read_zarr('{}') z, ST_Read('{}') v \n                 WHERE ST_Contains(v.geom, ST_Point(z.lon, z.lat))",
+                zarr_uri.replace("'", "''"), vector_path.replace("'", "''")
+            );
+            
+            match conn.execute(&query, []) {
+                Ok(_) => {
+                    // NOTE: Use OutputFormat::Json from Task 1
+                    if cli.output == OutputFormat::Json {
+                        println!(r#"{{"status": "success", "db": "{}"}}"#, out);
+                    } else {
+                        println!("Extraction complete! Data saved to table 'extracted_data' in {}", out);
+                        println!("Run `zarrduck shell {}` to explore it.", out);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Extraction failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Shell { db_path } => {
             println!("Opening shell for {}", db_path);
