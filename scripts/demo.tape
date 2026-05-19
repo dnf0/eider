@@ -17,6 +17,8 @@ Sleep 5s
 Type "python3 scripts/generate_demo_data.py"
 Enter
 Sleep 5s
+Type "export ZARRDUCK_LOCAL_STAC='http://localhost:8080 - Local Demo Catalog'"
+Enter
 Type "export PATH=$PWD/target/debug:$PATH"
 Enter
 Type "rm -f *.duckdb"
@@ -33,20 +35,20 @@ Sleep 1s
 Type "zarrduck search --bbox -122.27,37.77,-122.22,37.81"
 Enter
 Sleep 2s
-Type "plan"
+Type "demo"
 Sleep 1s
 Enter
-Sleep 4s
-Type "3dep"
-Sleep 1s
-Enter
-Sleep 4s
-Type "era5"
-Sleep 1s
-Enter
-Sleep 4s
-Type "air temp max"
 Sleep 2s
+Type "mock"
+Sleep 1s
+Enter
+Sleep 2s
+Type "local"
+Sleep 1s
+Enter
+Sleep 2s
+Type "air_temp"
+Sleep 1s
 Enter
 Sleep 4s
 
