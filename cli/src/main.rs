@@ -125,16 +125,26 @@ enum Commands {
     },
 }
 
-fn detect_columns(conn: &duckdb::Connection, table: &str) -> EyreResult<(String, String, String, String)> {
+fn detect_columns(conn: &duckdb::Connection, table: &str) -> EyreResult<(String, String, String, String, bool)> {
     let mut stmt = conn.prepare(&format!("DESCRIBE \"{}\"", table.replace("\"", "\"\"")))
         .wrap_err_with(|| format!("Failed to describe table '{}'", table))?;
     
     let mut rows = stmt.query([])?;
     
     let mut columns = Vec::new();
+    let mut time_is_numeric = false;
+    
     while let Some(row) = rows.next()? {
         let col_name: String = row.get(0)?;
-        columns.push(col_name.to_lowercase());
+        let col_type: String = row.get(1)?;
+        let col_lower = col_name.to_lowercase();
+        columns.push(col_lower.clone());
+        
+        if col_lower.contains("time") || col_lower.contains("date") {
+            if col_type.contains("INT") || col_type.contains("DOUBLE") || col_type.contains("FLOAT") {
+                time_is_numeric = true;
+            }
+        }
     }
 
     // Heuristics
@@ -150,11 +160,11 @@ fn detect_columns(conn: &duckdb::Connection, table: &str) -> EyreResult<(String,
     let val_col = columns.iter().find(|&c| c != &time_col && c != &lat_col && c != &lon_col && c != "geom")
         .cloned().ok_or_else(|| eyre!("Could not automatically detect a value column"))?;
 
-    Ok((time_col, lat_col, lon_col, val_col))
+    Ok((time_col, lat_col, lon_col, val_col, time_is_numeric))
 }
 
 fn load_geozarr_extension(conn: &Connection) -> EyreResult<()> {
-    let ext_name = "geozarr.duckdb_extension";
+    let ext_name = "duckdb_geozarr.duckdb_extension";
 
     let path1 = format!("./target/debug/{}", ext_name);
     let path2 = format!("../target/debug/{}", ext_name);
@@ -1023,10 +1033,10 @@ async fn run_cli(mut cli: Cli, config: ZarrduckConfig) -> EyreResult<()> {
             let input_conn = Connection::open(&input_db)
                 .wrap_err_with(|| format!("Failed to open input database '{}'", input_db))?;
             
-            let (time_col, lat_col, lon_col, val_col) = detect_columns(&input_conn, "extracted_data")?;
+            let (time_col, lat_col, lon_col, val_col, time_is_numeric) = detect_columns(&input_conn, "extracted_data")?;
             
             if resolved_output != OutputFormat::Json {
-                println!("Detected schema: Time='{}', Spatial='{}', '{}', Value='{}'", time_col, lat_col, lon_col, val_col);
+                println!("Detected schema: Time='{}' (numeric={}), Spatial='{}', '{}', Value='{}'", time_col, time_is_numeric, lat_col, lon_col, val_col);
             }
             
             // Just close the input connection so we don't lock the file for the next step
@@ -1076,6 +1086,12 @@ async fn run_cli(mut cli: Cli, config: ZarrduckConfig) -> EyreResult<()> {
             conn.execute(&format!("ATTACH '{}' AS source_db", input_db), [])
                 .wrap_err("Failed to attach input database")?;
                 
+            let time_expr = if time_is_numeric {
+                format!("to_timestamp(CAST({} AS BIGINT))", time_col)
+            } else {
+                time_col.clone()
+            };
+
             let query = format!(
                 "CREATE TABLE resampled_data AS 
                  SELECT 
@@ -1084,7 +1100,7 @@ async fn run_cli(mut cli: Cli, config: ZarrduckConfig) -> EyreResult<()> {
                      {}({}) as value
                  FROM source_db.extracted_data
                  GROUP BY 1, 2, 3",
-                freq.replace("'", "''"), time_col, time_col,
+                freq.replace("'", "''"), time_expr, time_col,
                 lat_col, lon_col,
                 agg, val_col
             );

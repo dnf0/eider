@@ -8,7 +8,7 @@ Set Theme "Dracula"
 
 # Build the project to ensure the binary is fresh before recording
 Hide
-Type "cargo build -p zarrduck && cd extension && cargo duckdb-ext build --duckdb-version v1.5.2 -- --features loadable-extension && cd .. && cp target/debug/duckdb_geozarr.duckdb_extension target/debug/geozarr.duckdb_extension"
+Type "cargo build -p zarrduck && cd extension && cargo duckdb-ext build --duckdb-version v1.5.2 -- --features loadable-extension && cd .."
 Enter
 Sleep 10s
 Type "pip3 install zarr numpy"
@@ -37,7 +37,7 @@ Sleep 3s
 Type "# 2. Perform a massive Vector-Raster join on the cloud"
 Enter
 Sleep 1s
-Type "zarrduck extract climate_data.zarr scripts/demo_region.geojson --out analysis.duckdb"
+Type "zarrduck extract climate_data.zarr/air_temperature scripts/demo_region.geojson --out analysis.duckdb"
 Enter
 Sleep 4s
 
