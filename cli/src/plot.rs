@@ -197,6 +197,25 @@ fn plot_heatmap(conn: &Connection, table: &str, val_col: &str, group_by: Option<
     let rows_count = 20;
     let cols_count = 40;
 
+    let bounds_query = format!(
+        "SELECT min(\"{lat}\"), max(\"{lat}\"), min(\"{lon}\"), max(\"{lon}\") FROM \"{t}\"",
+        lat = lat_col.replace("\"", "\"\""),
+        lon = lon_col.replace("\"", "\"\""),
+        t = table.replace("\"", "\"\"")
+    );
+    let mut bounds_stmt = conn.prepare(&bounds_query)?;
+    let mut bounds_rows = bounds_stmt.query([])?;
+    let mut min_lat_bound = 0.0;
+    let mut max_lat_bound = 0.0;
+    let mut min_lon_bound = 0.0;
+    let mut max_lon_bound = 0.0;
+    if let Some(row) = bounds_rows.next()? {
+        min_lat_bound = row.get(0).unwrap_or(0.0);
+        max_lat_bound = row.get(1).unwrap_or(0.0);
+        min_lon_bound = row.get(2).unwrap_or(0.0);
+        max_lon_bound = row.get(3).unwrap_or(0.0);
+    }
+
     let query = format!(
         "WITH bounds AS (
             SELECT min(\"{lat}\") as min_lat, max(\"{lat}\") as max_lat,
@@ -265,6 +284,14 @@ fn plot_heatmap(conn: &Connection, table: &str, val_col: &str, group_by: Option<
     
     println!("\nHeatmap of {} (Spatial):\n", val_col);
     for r in (0..rows_count).rev() { // Print top-to-bottom
+        if r == rows_count - 1 {
+            print!("{:>8.2} ┤ ", max_lat_bound);
+        } else if r == 0 {
+            print!("{:>8.2} ┤ ", min_lat_bound);
+        } else {
+            print!("           │ ");
+        }
+
         for c in 0..cols_count {
             let val = grid_data[r][c];
             if val.is_nan() {
@@ -280,6 +307,28 @@ fn plot_heatmap(conn: &Connection, table: &str, val_col: &str, group_by: Option<
             }
         }
         println!();
+    }
+    
+    // Print X-axis
+    let padding = " ".repeat(11);
+    let plot_width = cols_count * 2;
+    print!("{}└", " ".repeat(10));
+    for _ in 0..cols_count {
+        print!("──");
+    }
+    println!();
+    
+    let start_lon_str = format!("{:.2}", min_lon_bound);
+    let end_lon_str = format!("{:.2}", max_lon_bound);
+    let start_len = start_lon_str.chars().count();
+    let end_len = end_lon_str.chars().count();
+    
+    if plot_width > start_len + end_len {
+        let space_between = plot_width - start_len - end_len;
+        println!("{}{}{}{}", padding, start_lon_str, " ".repeat(space_between), end_lon_str);
+    } else {
+        println!("{}{}", padding, start_lon_str);
+        println!("{}{}", " ".repeat(11 + plot_width.saturating_sub(end_len)), end_lon_str);
     }
     
     println!("\nLegend:");
