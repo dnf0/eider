@@ -6,3 +6,4 @@ __pycache__/
 e2e_benchmark.md
 target_docker/
 docs/book/
+.envrc
