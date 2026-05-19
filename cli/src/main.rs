@@ -338,7 +338,7 @@ async fn run_cli(mut cli: Cli, config: ZarrduckConfig) -> EyreResult<()> {
                         .template("{spinner:.green} {msg}")
                         .unwrap()
                 );
-                pb.set_message("Performing spatial extraction (this may take a few minutes)...");
+                pb.set_message("Extracting spatial data...");
                 pb.enable_steady_tick(std::time::Duration::from_millis(100));
                 Some(pb)
             } else {
@@ -365,20 +365,26 @@ async fn run_cli(mut cli: Cli, config: ZarrduckConfig) -> EyreResult<()> {
             }
         }
         Commands::Shell { db_path } => {
-            let ext_path = if cfg!(target_os = "windows") {
-                "../target/debug/geozarr.duckdb_extension"
+            let ext_name = "duckdb_geozarr.duckdb_extension";
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let path1 = cwd.join("target").join("debug").join(ext_name);
+            let path2 = cwd.parent().unwrap_or(&cwd).join("target").join("debug").join(ext_name);
+            
+            let ext_path = if path1.exists() {
+                path1.to_string_lossy().into_owned()
             } else {
-                "../target/debug/libgeozarr.duckdb_extension"
+                path2.to_string_lossy().into_owned()
             };
             
             let init_commands = format!(
-                "SET allow_unsigned_extensions = true; LOAD '{}'; INSTALL spatial; LOAD spatial;", 
+                "LOAD '{}'; INSTALL spatial; LOAD spatial;", 
                 ext_path
             );
             
             println!("Starting DuckDB shell...");
             let status = Command::new("duckdb")
                 .arg(&db_path)
+                .arg("-unsigned")
                 .arg("-cmd")
                 .arg(&init_commands)
                 .status();
