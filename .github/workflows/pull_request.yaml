@@ -91,8 +91,14 @@ jobs:
         with:
           tool: cargo-llvm-cov,cargo-audit
 
+      - name: Install duckdb-ext-tools
+        run: cargo install cargo-duckdb-ext-tools --force
+
       - name: Run cargo audit
         run: cargo audit
+
+      - name: Build extension
+        run: cargo duckdb-ext build
 
       - name: Generate code coverage
         run: cargo llvm-cov --workspace --lcov --output-path lcov.info
