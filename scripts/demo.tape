@@ -38,18 +38,10 @@ Sleep 3s
 # Step 2: Zonal Extraction
 Type "clear"
 Enter
-Type "# 2. Extract and join spatial data (Interactive Dataset Selection)"
+Type "# 2. Perform a massive Vector-Raster join on the cloud"
 Enter
 Sleep 1s
-Type "zarrduck extract climate_data.zarr scripts/demo_region.geojson --out analysis.duckdb"
-Enter
-Sleep 2s
-Down 1
-Sleep 1s
-Down 1
-Sleep 1s
-Up 2
-Sleep 1s
+Type "zarrduck extract climate_data.zarr/air_temperature scripts/demo_region.geojson --out analysis.duckdb"
 Enter
 Sleep 4s
 
@@ -74,7 +66,7 @@ Enter
 Sleep 3s
 Type "SELECT time, lat, lon, value FROM resampled_data LIMIT 5;"
 Enter
-Sleep 4s
+Sleep 5s
 
 Type ".exit"
 Enter
