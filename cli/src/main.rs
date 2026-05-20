@@ -379,7 +379,9 @@ async fn run_cli(mut cli: Cli, config: ZarrduckConfig) -> EyreResult<()> {
             ).wrap_err("Failed to prepare planning query")?;
 
             let (total_chunks, total_bytes): (u64, u64) = plan_query.query_row(duckdb::params![zarr_uri, lon_min, lat_min, lon_max, lat_max], |row| {
-                Ok((row.get(0)?, row.get(1)?))
+                let chunks: i64 = row.get(0)?;
+                let bytes: i64 = row.get(1)?;
+                Ok((chunks as u64, bytes as u64))
             }).wrap_err("Failed to execute planning query")?;
 
             if resolved_output != OutputFormat::Json {

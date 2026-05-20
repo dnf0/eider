@@ -1149,6 +1149,8 @@ impl VTab for PlanReadZarrVTab {
                 output.flat_vector(chunk_idx).as_mut_slice::<i64>()[0] = bind_data.total_chunks as i64;
             } else if col_idx == total_bytes_idx {
                 output.flat_vector(chunk_idx).as_mut_slice::<i64>()[0] = bind_data.total_bytes as i64;
+            } else {
+                output.flat_vector(chunk_idx).set_null(0);
             }
         }
         
