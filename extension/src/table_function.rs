@@ -171,11 +171,13 @@ macro_rules! dispatch_yield_loop {
                     if let Some(coord_vals) = $bind_data.coords.get(&$bind_data.dim_names[dim]) {
                         let mut coord_vector = $output.flat_vector(dim);
                         let coord_slice = coord_vector.as_mut_slice::<f64>();
+                        let is_0_360 = $bind_data.lon_0_360_dims.contains(&dim);
                         for (idx, (_, global_coords)) in valid_coords.iter().enumerate() {
-                            coord_slice[valid_rows + idx] = coord_vals
+                            let raw = coord_vals
                                 .get(global_coords[dim] as usize)
                                 .copied()
                                 .unwrap_or(f64::NAN);
+                            coord_slice[valid_rows + idx] = if is_0_360 && raw > 180.0 { raw - 360.0 } else { raw };
                         }
                     } else if let Some(ref transform) = $bind_data.spatial_transform {
                         if dim < transform.scale.len() {
@@ -257,6 +259,9 @@ pub struct ReadZarrBindData {
     pub data_type: DataType,
     pub dim_names: Vec<String>,
     pub coords: HashMap<String, Vec<f64>>,
+    /// Indices of coordinate dimensions that use 0-360 longitude convention.
+    /// Values are stored as 0-360 internally; output is normalized to -180-180.
+    pub lon_0_360_dims: std::collections::HashSet<usize>,
     pub bounds_min: Vec<u64>,
     pub bounds_max: Vec<u64>,
     pub fill_value_bytes: Option<Vec<u8>>,
@@ -358,6 +363,7 @@ impl VTab for ReadZarrVTab {
         let dim_names = resolve_dimension_names(metadata, rank);
 
         let mut coords = std::collections::HashMap::new();
+        let mut lon_0_360_dims = std::collections::HashSet::new();
         // Eagerly load 1D coordinate arrays if they exist
         for (dim_index, name) in dim_names.iter().enumerate() {
             if let Ok(coord_array) =
@@ -387,7 +393,69 @@ impl VTab for ReadZarrVTab {
                     // Validate that the loaded chunk covers the entire dimension length
                     if let Ok(vals) = vals_result {
                         if vals.len() as u64 == shape[dim_index] {
+                            // Track 0-360 longitude dimensions so we can convert queries and output
+                            let is_lon = name == "lon" || name == "longitude";
+                            if is_lon && vals.iter().any(|&v| v > 180.0) {
+                                lon_0_360_dims.insert(dim_index);
+                            }
                             coords.insert(name.clone(), vals);
+                        }
+                    }
+                }
+            }
+        }
+
+        // If any coordinate arrays were missing, try the parent directory (CF/CMIP6 convention:
+        // arrays live in a sub-group but coordinate arrays live at the group level).
+        let missing_dims: Vec<usize> = dim_names
+            .iter()
+            .enumerate()
+            .filter(|(_, name)| !coords.contains_key(*name))
+            .map(|(i, _)| i)
+            .collect();
+        if !missing_dims.is_empty() {
+            let parent_path = path
+                .trim_end_matches('/')
+                .rsplit_once('/')
+                .map(|(p, _)| p.to_string());
+            if let Some(ref parent) = parent_path {
+                if let Ok(parent_store) = resolve_store(parent) {
+                    for dim_index in &missing_dims {
+                        let name = &dim_names[*dim_index];
+                        if let Ok(coord_array) = zarrs::array::Array::open(
+                            Arc::clone(&parent_store),
+                            &format!("/{}", name),
+                        ) {
+                            if coord_array.shape().len() == 1
+                                && coord_array.shape()[0] < 1_000_000
+                                && coord_array.shape()[0] == shape[*dim_index]
+                            {
+                                let subset = zarrs::array_subset::ArraySubset::new_with_shape(
+                                    coord_array.shape().to_vec(),
+                                );
+                                let vals_result: Result<Vec<f64>, _> =
+                                    match coord_array.data_type() {
+                                        zarrs::array::DataType::Float64 => coord_array
+                                            .retrieve_array_subset_elements::<f64>(&subset),
+                                        zarrs::array::DataType::Float32 => coord_array
+                                            .retrieve_array_subset_elements::<f32>(&subset)
+                                            .map(|v| v.into_iter().map(|x| x as f64).collect()),
+                                        zarrs::array::DataType::Int64 => coord_array
+                                            .retrieve_array_subset_elements::<i64>(&subset)
+                                            .map(|v| v.into_iter().map(|x| x as f64).collect()),
+                                        zarrs::array::DataType::Int32 => coord_array
+                                            .retrieve_array_subset_elements::<i32>(&subset)
+                                            .map(|v| v.into_iter().map(|x| x as f64).collect()),
+                                        _ => continue,
+                                    };
+                                if let Ok(vals) = vals_result {
+                                    let is_lon = name == "lon" || name == "longitude";
+                                    if is_lon && vals.iter().any(|&v| v > 180.0) {
+                                        lon_0_360_dims.insert(*dim_index);
+                                    }
+                                    coords.insert(name.clone(), vals);
+                                }
+                            }
                         }
                     }
                 }
@@ -485,15 +553,19 @@ impl VTab for ReadZarrVTab {
             let max_val_opt = bind.get_named_parameter(&max_param_name).and_then(|v| v.to_string().parse::<f64>().ok());
 
             if let Some(coord_vals) = coords.get(name) {
+                // For 0-360 longitude dimensions, convert -180-180 query values to 0-360
+                let normalize_query = |v: f64| -> f64 {
+                    if lon_0_360_dims.contains(&dim_index) && v < 0.0 { v + 360.0 } else { v }
+                };
                 if let Some(min_val) = min_val_opt {
                     let (translated_min, _) = crate::table_function::translate_filter(
-                        coord_vals, ">=", min_val, bounds_min[dim_index], bounds_max[dim_index]
+                        coord_vals, ">=", normalize_query(min_val), bounds_min[dim_index], bounds_max[dim_index]
                     );
                     bounds_min[dim_index] = std::cmp::max(bounds_min[dim_index], translated_min);
                 }
                 if let Some(max_val) = max_val_opt {
                     let (_, translated_max) = crate::table_function::translate_filter(
-                        coord_vals, "<=", max_val, bounds_min[dim_index], bounds_max[dim_index]
+                        coord_vals, "<=", normalize_query(max_val), bounds_min[dim_index], bounds_max[dim_index]
                     );
                     bounds_max[dim_index] = std::cmp::min(bounds_max[dim_index], translated_max);
                 }
@@ -547,6 +619,7 @@ impl VTab for ReadZarrVTab {
             data_type,
             dim_names,
             coords,
+            lon_0_360_dims,
             bounds_min,
             bounds_max,
             fill_value_bytes,
@@ -752,11 +825,13 @@ impl VTab for ReadZarrVTab {
                             {
                                 let mut coord_vector = output.flat_vector(dim);
                                 let coord_slice = coord_vector.as_mut_slice::<f64>();
+                                let is_0_360 = bind_data.lon_0_360_dims.contains(&dim);
                                 for (idx, (_, global_coords)) in valid_coords.iter().enumerate() {
-                                    coord_slice[valid_rows + idx] = coord_vals
+                                    let raw = coord_vals
                                         .get(global_coords[dim] as usize)
                                         .copied()
                                         .unwrap_or(f64::NAN);
+                                    coord_slice[valid_rows + idx] = if is_0_360 && raw > 180.0 { raw - 360.0 } else { raw };
                                 }
                             } else if let Some(ref transform) = bind_data.spatial_transform {
                                 if dim < transform.scale.len() {

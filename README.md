@@ -8,6 +8,36 @@ A high-performance, cloud-native [DuckDB](https://duckdb.org/) extension for rea
 
 📖 **[Read the Full Documentation here!](https://dnf0.github.io/duckdb_geozarr/)**
 
+## Performance
+
+Benchmarked against `xarray` + `shapely` on the [CMIP6 CESM2 historical surface temperature dataset](https://storage.googleapis.com/cmip6/CMIP6/CMIP/NCAR/CESM2/historical/r1i1p1f1/Amon/tas/gn/v20190308/) hosted on Google Cloud Storage (~1° resolution, 1980 monthly steps, 1850–2014). Query: extract all grid cells within the California bounding box (−125°–−115°, 30°–45°).
+
+### Extraction: chunk granularity matters
+
+| Tool | Download | Time | Note |
+|---|---|---|---|
+| zarrduck | 506 MB | ~48 s | Full spatial chunk (192×288 grid = whole globe) |
+| xarray + shapely | ~42 MB | ~8 s | Server-side lat slice before download |
+| zarrduck (spatially chunked¹) | 38 MB | ~2.2 s | Only intersecting chunks fetched |
+| xarray (spatially chunked¹) | ~2 MB | ~0.9 s | Server-side bbox slice |
+
+> ¹ Local Zarr re-chunked to 73×144 (2.5° grid). Chunk granularity is the dominant factor — zarrduck's spatial pruning skips non-intersecting chunks entirely, but cannot partially read within a chunk.
+
+**Takeaway:** zarrduck matches or beats xarray when the Zarr store is chunked at a spatial granularity that aligns with query regions. For datasets with single global spatial chunks (common in CMIP6), xarray's coordinate-aware server-side slicing downloads less data.
+
+### Post-extraction analytics: zarrduck's sweet spot
+
+Once data is extracted into DuckDB (221,760 rows, California CMIP6), subsequent SQL queries are near-instant and compose freely with other DuckDB tables — no IPC or Python overhead:
+
+| Query | DuckDB | pandas (equiv.) |
+|---|---|---|
+| Spatial mean (GROUP BY lat, lon) | 3 ms | ~4 ms + IPC |
+| Top-N hottest months | 1.2 ms | ~6 ms + IPC |
+| Decadal trend | 1.2 ms | ~4 ms + IPC |
+| Monthly anomaly | 2 ms | ~3 ms + IPC |
+
+Overall scan rate: **~209 M rows/s** on extracted data. The extraction cost is paid once; every subsequent query is free in DuckDB's vectorized engine.
+
 ## Why DuckDB GeoZarr?
 
 Geospatial and climate data are frequently stored in Zarr format because it enables efficient, chunked, and compressed storage of multi-dimensional arrays (like Time × Latitude × Longitude). However, querying this data traditionally required loading it into Python (via `xarray` or `zarr-python`) before performing analytics, introducing massive IPC (Inter-Process Communication) and memory overhead.

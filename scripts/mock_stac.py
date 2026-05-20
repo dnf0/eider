@@ -10,9 +10,9 @@ class StacHandler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({
                 "collections": [{
-                    "id": "mock-climate",
-                    "title": "High-Resolution Local Climate",
-                    "description": "Mock climate dataset containing air temperature, lat, lon, and time."
+                    "id": "cmip6-cesm2-historical",
+                    "title": "CMIP6 CESM2 Historical Surface Temperature",
+                    "description": "Near-surface air temperature from NCAR CESM2 historical runs (CMIP6). Monthly means, ~1° resolution, 1850–2014."
                 }]
             }).encode())
         else:
@@ -28,10 +28,10 @@ class StacHandler(BaseHTTPRequestHandler):
                 "features": [{
                     "assets": {
                         "data": {
-                            "href": "climate_data.zarr",
+                            "href": "https://storage.googleapis.com/cmip6/CMIP6/CMIP/NCAR/CESM2/historical/r1i1p1f1/Amon/tas/gn/v20190308/tas",
                             "type": "application/vnd+zarr",
-                            "title": "Local Climate Zarr",
-                            "description": "Full N-dimensional Zarr group"
+                            "title": "CMIP6 CESM2 Near-Surface Air Temperature",
+                            "description": "Monthly mean near-surface air temperature (tas) from NCAR CESM2 historical simulation, 1850–2014"
                         }
                     }
                 }]

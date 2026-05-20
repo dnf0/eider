@@ -14,9 +14,6 @@ Sleep 10s
 Type "pip3 install -r requirements.txt"
 Enter
 Sleep 5s
-Type "python3 scripts/generate_demo_data.py"
-Enter
-Sleep 5s
 Type "export ZARRDUCK_LOCAL_STAC='http://localhost:8080 - Local Demo Catalog'"
 Enter
 Type "export PATH=$PWD/target/debug:$PATH"
@@ -40,26 +37,26 @@ Type "demo"
 Sleep 1s
 Enter
 Sleep 2s
-Type "mock"
+Type "cmip6"
 Sleep 1s
 Enter
 Sleep 2s
-Type "air_temp"
+Type "tas"
 Sleep 1s
 Enter
 Sleep 4s
 
-# Step 2: Zonal Extraction
+# Step 2: Zonal Extraction (streaming directly from Google Cloud Storage)
 Hide
 Type "printf '\033[1A\033[2K\n\033[1;36m# 2. Extract and join spatial data\033[0m\n'"
 Enter
 Show
 Sleep 1s
-Type "zarrduck extract climate_data.zarr/air_temperature scripts/demo_region.geojson --out analysis.duckdb"
+Type "zarrduck extract https://storage.googleapis.com/cmip6/CMIP6/CMIP/NCAR/CESM2/historical/r1i1p1f1/Amon/tas/gn/v20190308/tas scripts/demo_region.geojson --out analysis.duckdb"
 Enter
 Sleep 3s
 Enter
-Sleep 4s
+Sleep 8s
 
 # Step 3: Temporal Resampling
 Hide
@@ -118,4 +115,4 @@ Sleep 2s
 Type "Heatmap"
 Sleep 1s
 Enter
-Sleep 5s
+Sleep 8s
