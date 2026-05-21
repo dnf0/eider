@@ -5,6 +5,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use zarrs::array::{ArrayMetadata, DataType};
+use zarrs::array_subset::ArraySubset;
 use zarrs::storage::ReadableStorageTraits;
 
 pub fn resolve_store(
@@ -83,74 +84,67 @@ macro_rules! dispatch_yield_loop {
     ($rust_type:ty, $enum_variant:path, $output:expr, $local_state:expr, $global_state:expr, $bind_data:expr) => {{
         let rank = $bind_data.shape.len();
         let mut value_vector = $output.flat_vector(rank);
-
         let fill_bytes_slice = $bind_data.fill_value_bytes.as_deref().unwrap_or_default();
-
         let mut valid_rows = 0;
 
         loop {
-            // If buffer is empty, lock global state to get a new chunk grid, then fetch
+            // Fetch next chunk subset if buffer is empty
             if $local_state.current_chunk_buffer.is_none() {
                 let mut g_state = $global_state
                     .lock()
                     .map_err(|e| format!("Mutex poisoned: {}", e))?;
-                if g_state.exhausted {
-                    break;
-                }
+                if g_state.exhausted { break; }
 
-                // Copy the current global grid to our local assigned grid
                 $local_state.assigned_grid = g_state.current_chunk_grid.clone();
 
-                // Increment the global grid for the next thread
-                let mut grid_shape = vec![0; rank];
-                let mut chunk_bounds_min = vec![0; rank];
-                let mut chunk_bounds_max = vec![0; rank];
+                let mut grid_shape = vec![0u64; rank];
+                let mut chunk_bounds_min = vec![0u64; rank];
+                let mut chunk_bounds_max = vec![0u64; rank];
                 for i in 0..rank {
-                    grid_shape[i] = ($bind_data.shape[i] as f64 / $bind_data.chunk_shape[i] as f64)
-                        .ceil() as u64;
+                    grid_shape[i] = ($bind_data.shape[i] as f64 / $bind_data.chunk_shape[i] as f64).ceil() as u64;
                     chunk_bounds_min[i] = $bind_data.bounds_min[i] / $bind_data.chunk_shape[i];
                     chunk_bounds_max[i] = $bind_data.bounds_max[i] / $bind_data.chunk_shape[i];
                 }
-
                 if !crate::table_function::increment_chunk_grid(
-                    &mut g_state.current_chunk_grid,
-                    &grid_shape,
-                    &chunk_bounds_min,
-                    &chunk_bounds_max,
-                ) {
-                    g_state.exhausted = true;
-                }
-                // Explicitly drop global lock before I/O
+                    &mut g_state.current_chunk_grid, &grid_shape, &chunk_bounds_min, &chunk_bounds_max,
+                ) { g_state.exhausted = true; }
                 drop(g_state);
 
-                // Fetch the chunk lock-free
-                let elements = $bind_data
-                    .array
-                    .retrieve_chunk_elements::<$rust_type>(&$local_state.assigned_grid)
+                // Compute the intersection of [bounds_min, bounds_max] with this chunk
+                // as a chunk-local ArraySubset (start relative to chunk origin).
+                let mut subset_start = vec![0u64; rank];
+                let mut subset_shape = vec![0u64; rank];
+                let mut global_starts = vec![0u64; rank];
+                let mut strides = vec![1u64; rank];
+                for d in 0..rank {
+                    let chunk_start = $local_state.assigned_grid[d] * $bind_data.chunk_shape[d];
+                    let chunk_end_inc = chunk_start + $bind_data.chunk_shape[d] - 1;
+                    let lo = $bind_data.bounds_min[d].max(chunk_start);
+                    let hi = $bind_data.bounds_max[d].min(chunk_end_inc);
+                    subset_start[d] = lo - chunk_start;
+                    subset_shape[d] = hi - lo + 1;
+                    global_starts[d] = lo;
+                }
+                for d in (0..rank - 1).rev() {
+                    strides[d] = strides[d + 1] * subset_shape[d + 1];
+                }
+
+                // zarrs handles codec-level partial reads (Blosc sub-block, HTTP byte-range, etc.)
+                let chunk_subset = ArraySubset::new_with_start_shape(subset_start, subset_shape.clone())
+                    .map_err(|e| format!("Invalid chunk subset: {}", e))?;
+                let elements = $bind_data.array
+                    .retrieve_chunk_subset_elements::<$rust_type>(&$local_state.assigned_grid, &chunk_subset)
                     .map_err(|e| format!("zarrs read error: {}", e))?;
+
+                if elements.is_empty() {
+                    continue;
+                }
+
                 $local_state.current_chunk_buffer = Some($enum_variant(elements));
-
-                // Pre-compute the valid (flat_idx, global_coords) pairs for this chunk.
-                // Odometer over the valid sub-cube avoids per-element bounds checks.
-                $local_state.precomputed_valid = Some(
-                    crate::table_function::precompute_valid_elements(
-                        &$local_state.assigned_grid,
-                        &$bind_data.chunk_shape,
-                        &$bind_data.bounds_min,
-                        &$bind_data.bounds_max,
-                    )
-                );
-                $local_state.valid_cursor = 0;
-            }
-
-            let precomputed = $local_state.precomputed_valid.as_ref().unwrap();
-
-            // Chunk exhausted (possibly zero valid elements) — release buffer and continue
-            if $local_state.valid_cursor >= precomputed.len() {
-                $local_state.current_chunk_buffer = None;
-                $local_state.precomputed_valid = None;
-                $local_state.valid_cursor = 0;
-                continue;
+                $local_state.subset_global_starts = global_starts;
+                $local_state.subset_shape = subset_shape;
+                $local_state.subset_strides = strides;
+                $local_state.element_cursor = 0;
             }
 
             let buffer = match $local_state.current_chunk_buffer.as_ref().unwrap() {
@@ -158,82 +152,79 @@ macro_rules! dispatch_yield_loop {
                 _ => return Err("Chunk buffer type mismatch".into()),
             };
 
-            let remaining = precomputed.len() - $local_state.valid_cursor;
-            let batch_size = remaining.min(2048);
-            let batch = &precomputed[$local_state.valid_cursor..$local_state.valid_cursor + batch_size];
+            let total = buffer.len();
+            let batch_size = (total - $local_state.element_cursor).min(2048);
 
+            // Write coordinate columns. Global coord for element at flat position `pos` in
+            // dim `d` = global_starts[d] + (pos / strides[d]) % subset_shape[d].
             for dim in 0..rank {
                 if $local_state.projected_columns.contains(&dim) {
+                    let stride = $local_state.subset_strides[dim];
+                    let dim_size = $local_state.subset_shape[dim];
+                    let g_start = $local_state.subset_global_starts[dim];
+
                     if let Some(coord_vals) = $bind_data.coords.get(&$bind_data.dim_names[dim]) {
+                        let is_0_360 = $bind_data.lon_0_360_dims.contains(&dim);
                         let mut coord_vector = $output.flat_vector(dim);
                         let coord_slice = coord_vector.as_mut_slice::<f64>();
-                        let is_0_360 = $bind_data.lon_0_360_dims.contains(&dim);
-                        for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                            let raw = coord_vals
-                                .get(global_coords[dim] as usize)
-                                .copied()
-                                .unwrap_or(f64::NAN);
-                            coord_slice[valid_rows + idx] = if is_0_360 && raw > 180.0 { raw - 360.0 } else { raw };
+                        for i in 0..batch_size {
+                            let pos = ($local_state.element_cursor + i) as u64;
+                            let g_idx = (g_start + (pos / stride) % dim_size) as usize;
+                            let raw = coord_vals.get(g_idx).copied().unwrap_or(f64::NAN);
+                            coord_slice[valid_rows + i] = if is_0_360 && raw > 180.0 { raw - 360.0 } else { raw };
                         }
                     } else if let Some(ref transform) = $bind_data.spatial_transform {
                         if dim < transform.scale.len() {
                             let mut coord_vector = $output.flat_vector(dim);
                             let coord_slice = coord_vector.as_mut_slice::<f64>();
-                            for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                                coord_slice[valid_rows + idx] =
-                                    apply_transform(transform, dim, global_coords[dim]);
+                            for i in 0..batch_size {
+                                let pos = ($local_state.element_cursor + i) as u64;
+                                let g_idx = g_start + (pos / stride) % dim_size;
+                                coord_slice[valid_rows + i] = apply_transform(transform, dim, g_idx);
                             }
                         } else {
                             let mut coord_vector = $output.flat_vector(dim);
                             let coord_slice = coord_vector.as_mut_slice::<i64>();
-                            for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                                coord_slice[valid_rows + idx] = global_coords[dim] as i64;
+                            for i in 0..batch_size {
+                                let pos = ($local_state.element_cursor + i) as u64;
+                                coord_slice[valid_rows + i] = (g_start + (pos / stride) % dim_size) as i64;
                             }
                         }
                     } else {
                         let mut coord_vector = $output.flat_vector(dim);
                         let coord_slice = coord_vector.as_mut_slice::<i64>();
-                        for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                            coord_slice[valid_rows + idx] = global_coords[dim] as i64;
+                        for i in 0..batch_size {
+                            let pos = ($local_state.element_cursor + i) as u64;
+                            coord_slice[valid_rows + i] = (g_start + (pos / stride) % dim_size) as i64;
                         }
                     }
                 }
             }
 
+            // Write value column
             if $local_state.projected_columns.contains(&rank) {
-                {
-                    let value_slice = value_vector.as_mut_slice::<$rust_type>();
-                    for (idx, (local_idx, _)) in batch.iter().enumerate() {
-                        let val = buffer
-                            .get(*local_idx)
-                            .ok_or_else(|| "Malformed Zarr chunk: unexpected buffer size")?;
-                        value_slice[valid_rows + idx] = *val;
-                    }
+                let value_slice = value_vector.as_mut_slice::<$rust_type>();
+                for i in 0..batch_size {
+                    let val = buffer.get($local_state.element_cursor + i)
+                        .ok_or("Malformed Zarr chunk: unexpected buffer size")?;
+                    value_slice[valid_rows + i] = *val;
                 }
-                for (idx, (local_idx, _)) in batch.iter().enumerate() {
-                    let val = buffer
-                        .get(*local_idx)
-                        .ok_or_else(|| "Malformed Zarr chunk: unexpected buffer size")?;
-                    let val = *val;
+                for i in 0..batch_size {
+                    let val = *buffer.get($local_state.element_cursor + i)
+                        .ok_or("Malformed Zarr chunk: unexpected buffer size")?;
                     if val.is_fill_value(fill_bytes_slice) {
-                        value_vector.set_null(valid_rows + idx);
+                        value_vector.set_null(valid_rows + i);
                     }
                 }
             }
 
             valid_rows += batch_size;
-            $local_state.valid_cursor += batch_size;
-
-            // Release chunk buffer once all valid elements have been emitted
-            if $local_state.valid_cursor >= $local_state.precomputed_valid.as_ref().map_or(0, |v| v.len()) {
+            $local_state.element_cursor += batch_size;
+            if $local_state.element_cursor >= total {
                 $local_state.current_chunk_buffer = None;
-                $local_state.precomputed_valid = None;
-                $local_state.valid_cursor = 0;
             }
 
-            if valid_rows > 0 {
-                break;
-            }
+            if valid_rows > 0 { break; }
         }
 
         $output.set_len(valid_rows);
@@ -291,79 +282,14 @@ pub struct LocalState {
     pub assigned_grid: Vec<u64>,
     pub current_chunk_buffer: Option<ChunkBuffer>,
     pub projected_columns: Vec<usize>,
-    /// Pre-computed (flat_index, global_coords) for every valid element in the current chunk.
-    /// Computed once on chunk fetch; iterated via valid_cursor.
-    pub precomputed_valid: Option<Vec<(usize, Vec<u64>)>>,
-    pub valid_cursor: usize,
-}
-
-/// Enumerate all valid (flat_index, global_coords) pairs within a chunk's valid sub-cube.
-///
-/// Uses an odometer pattern over the intersection of [chunk_start, chunk_end] and
-/// [bounds_min, bounds_max], computing flat indices incrementally to avoid per-element
-/// division/modulo. O(valid_count) time and space.
-pub fn precompute_valid_elements(
-    chunk_grid: &[u64],
-    chunk_shape: &[u64],
-    bounds_min: &[u64],
-    bounds_max: &[u64],
-) -> Vec<(usize, Vec<u64>)> {
-    let rank = chunk_grid.len();
-
-    // C-order strides for the chunk
-    let mut strides = vec![1usize; rank];
-    for d in (0..rank - 1).rev() {
-        strides[d] = strides[d + 1] * chunk_shape[d + 1] as usize;
-    }
-
-    let chunk_global_starts: Vec<u64> = (0..rank)
-        .map(|d| chunk_grid[d] * chunk_shape[d])
-        .collect();
-
-    // Local (within-chunk) index range that overlaps with [bounds_min, bounds_max]
-    let local_ranges: Vec<(usize, usize)> = (0..rank)
-        .map(|d| {
-            let chunk_end = chunk_global_starts[d] + chunk_shape[d] - 1;
-            let lo = (bounds_min[d].max(chunk_global_starts[d]) - chunk_global_starts[d]) as usize;
-            let hi = (bounds_max[d].min(chunk_end) - chunk_global_starts[d]) as usize;
-            (lo, hi)
-        })
-        .collect();
-
-    let valid_count: usize = local_ranges.iter().map(|(lo, hi)| hi - lo + 1).product();
-    if valid_count == 0 {
-        return Vec::new();
-    }
-
-    let mut result = Vec::with_capacity(valid_count);
-    let mut cursor: Vec<usize> = local_ranges.iter().map(|(lo, _)| *lo).collect();
-    // Start flat index at the first valid element
-    let mut flat_idx: usize = (0..rank).map(|d| local_ranges[d].0 * strides[d]).sum();
-
-    loop {
-        let global_coords: Vec<u64> = (0..rank)
-            .map(|d| chunk_global_starts[d] + cursor[d] as u64)
-            .collect();
-        result.push((flat_idx, global_coords));
-
-        // Odometer increment from rightmost dimension
-        let mut d = rank - 1;
-        loop {
-            cursor[d] += 1;
-            flat_idx += strides[d];
-            if cursor[d] <= local_ranges[d].1 {
-                break;
-            }
-            // Wrap dimension d back to its start
-            let extent = local_ranges[d].1 - local_ranges[d].0 + 1;
-            flat_idx -= extent * strides[d];
-            cursor[d] = local_ranges[d].0;
-            if d == 0 {
-                return result;
-            }
-            d -= 1;
-        }
-    }
+    /// Cursor into `current_chunk_buffer` (which holds only the valid subset elements).
+    pub element_cursor: usize,
+    /// Global array start per dim for the current chunk's valid subset.
+    pub subset_global_starts: Vec<u64>,
+    /// Shape of the current chunk's valid subset (used for coord reconstruction).
+    pub subset_shape: Vec<u64>,
+    /// C-order strides within the subset (precomputed for coord reconstruction).
+    pub subset_strides: Vec<u64>,
 }
 
 pub struct ReadZarrInitData {
@@ -775,8 +701,10 @@ impl VTab for ReadZarrVTab {
                     assigned_grid: g_state.current_chunk_grid.clone(),
                     current_chunk_buffer: None,
                     projected_columns: init_data.projected_columns.clone(),
-                    precomputed_valid: None,
-                    valid_cursor: 0,
+                    element_cursor: 0,
+                    subset_global_starts: vec![],
+                    subset_shape: vec![],
+                    subset_strides: vec![],
                 }
             }
         };
@@ -824,68 +752,62 @@ impl VTab for ReadZarrVTab {
                 )
             }
             zarrs::array::DataType::String => {
-                // Strings must be handled explicitly since DuckDB Varchar FlatVectors don't use as_mut_slice
+                // Strings use element-by-element insert rather than as_mut_slice
                 let mut valid_rows = 0;
                 let rank = bind_data.shape.len();
                 let mut value_vector = output.flat_vector(rank);
 
                 loop {
                     if local_state.current_chunk_buffer.is_none() {
-                        let mut g_state = init_data
-                            .global_state
-                            .lock()
+                        let mut g_state = init_data.global_state.lock()
                             .map_err(|e| format!("Mutex poisoned: {}", e))?;
-                        if g_state.exhausted {
-                            break;
-                        }
+                        if g_state.exhausted { break; }
 
                         local_state.assigned_grid = g_state.current_chunk_grid.clone();
 
-                        let mut grid_shape = vec![0; rank];
-                        let mut chunk_bounds_min = vec![0; rank];
-                        let mut chunk_bounds_max = vec![0; rank];
+                        let mut grid_shape = vec![0u64; rank];
+                        let mut chunk_bounds_min = vec![0u64; rank];
+                        let mut chunk_bounds_max = vec![0u64; rank];
                         for i in 0..rank {
-                            grid_shape[i] = (bind_data.shape[i] as f64
-                                / bind_data.chunk_shape[i] as f64)
-                                .ceil() as u64;
+                            grid_shape[i] = (bind_data.shape[i] as f64 / bind_data.chunk_shape[i] as f64).ceil() as u64;
                             chunk_bounds_min[i] = bind_data.bounds_min[i] / bind_data.chunk_shape[i];
                             chunk_bounds_max[i] = bind_data.bounds_max[i] / bind_data.chunk_shape[i];
                         }
-
                         if !crate::table_function::increment_chunk_grid(
-                            &mut g_state.current_chunk_grid,
-                            &grid_shape,
-                            &chunk_bounds_min,
-                            &chunk_bounds_max,
-                        ) {
-                            g_state.exhausted = true;
-                        }
+                            &mut g_state.current_chunk_grid, &grid_shape, &chunk_bounds_min, &chunk_bounds_max,
+                        ) { g_state.exhausted = true; }
                         drop(g_state);
 
-                        let elements = bind_data
-                            .array
-                            .retrieve_chunk_elements::<String>(&local_state.assigned_grid)
+                        let mut subset_start = vec![0u64; rank];
+                        let mut subset_shape = vec![0u64; rank];
+                        let mut global_starts = vec![0u64; rank];
+                        let mut strides = vec![1u64; rank];
+                        for d in 0..rank {
+                            let chunk_start = local_state.assigned_grid[d] * bind_data.chunk_shape[d];
+                            let chunk_end_inc = chunk_start + bind_data.chunk_shape[d] - 1;
+                            let lo = bind_data.bounds_min[d].max(chunk_start);
+                            let hi = bind_data.bounds_max[d].min(chunk_end_inc);
+                            subset_start[d] = lo - chunk_start;
+                            subset_shape[d] = hi - lo + 1;
+                            global_starts[d] = lo;
+                        }
+                        for d in (0..rank - 1).rev() {
+                            strides[d] = strides[d + 1] * subset_shape[d + 1];
+                        }
+
+                        let chunk_subset = ArraySubset::new_with_start_shape(subset_start, subset_shape.clone())
+                            .map_err(|e| format!("Invalid chunk subset: {}", e))?;
+                        let elements = bind_data.array
+                            .retrieve_chunk_subset_elements::<String>(&local_state.assigned_grid, &chunk_subset)
                             .map_err(|e| format!("zarrs read error: {}", e))?;
+
+                        if elements.is_empty() { continue; }
+
                         local_state.current_chunk_buffer = Some(ChunkBuffer::String(elements));
-
-                        local_state.precomputed_valid = Some(
-                            crate::table_function::precompute_valid_elements(
-                                &local_state.assigned_grid,
-                                &bind_data.chunk_shape,
-                                &bind_data.bounds_min,
-                                &bind_data.bounds_max,
-                            )
-                        );
-                        local_state.valid_cursor = 0;
-                    }
-
-                    let precomputed = local_state.precomputed_valid.as_ref().unwrap();
-
-                    if local_state.valid_cursor >= precomputed.len() {
-                        local_state.current_chunk_buffer = None;
-                        local_state.precomputed_valid = None;
-                        local_state.valid_cursor = 0;
-                        continue;
+                        local_state.subset_global_starts = global_starts;
+                        local_state.subset_shape = subset_shape;
+                        local_state.subset_strides = strides;
+                        local_state.element_cursor = 0;
                     }
 
                     let buffer = match local_state.current_chunk_buffer.as_ref().unwrap() {
@@ -893,73 +815,72 @@ impl VTab for ReadZarrVTab {
                         _ => return Err("Chunk buffer type mismatch".into()),
                     };
 
-                    let remaining = precomputed.len() - local_state.valid_cursor;
-                    let batch_size = remaining.min(2048);
-                    let batch = &precomputed[local_state.valid_cursor..local_state.valid_cursor + batch_size];
+                    let total = buffer.len();
+                    let batch_size = (total - local_state.element_cursor).min(2048);
 
                     for dim in 0..rank {
                         if local_state.projected_columns.contains(&dim) {
+                            let stride = local_state.subset_strides[dim];
+                            let dim_size = local_state.subset_shape[dim];
+                            let g_start = local_state.subset_global_starts[dim];
+
                             if let Some(coord_vals) = bind_data.coords.get(&bind_data.dim_names[dim]) {
+                                let is_0_360 = bind_data.lon_0_360_dims.contains(&dim);
                                 let mut coord_vector = output.flat_vector(dim);
                                 let coord_slice = coord_vector.as_mut_slice::<f64>();
-                                let is_0_360 = bind_data.lon_0_360_dims.contains(&dim);
-                                for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                                    let raw = coord_vals
-                                        .get(global_coords[dim] as usize)
-                                        .copied()
-                                        .unwrap_or(f64::NAN);
-                                    coord_slice[valid_rows + idx] = if is_0_360 && raw > 180.0 { raw - 360.0 } else { raw };
+                                for i in 0..batch_size {
+                                    let pos = (local_state.element_cursor + i) as u64;
+                                    let g_idx = (g_start + (pos / stride) % dim_size) as usize;
+                                    let raw = coord_vals.get(g_idx).copied().unwrap_or(f64::NAN);
+                                    coord_slice[valid_rows + i] = if is_0_360 && raw > 180.0 { raw - 360.0 } else { raw };
                                 }
                             } else if let Some(ref transform) = bind_data.spatial_transform {
                                 if dim < transform.scale.len() {
                                     let mut coord_vector = output.flat_vector(dim);
                                     let coord_slice = coord_vector.as_mut_slice::<f64>();
-                                    for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                                        coord_slice[valid_rows + idx] =
-                                            apply_transform(transform, dim, global_coords[dim]);
+                                    for i in 0..batch_size {
+                                        let pos = (local_state.element_cursor + i) as u64;
+                                        let g_idx = g_start + (pos / stride) % dim_size;
+                                        coord_slice[valid_rows + i] = apply_transform(transform, dim, g_idx);
                                     }
                                 } else {
                                     let mut coord_vector = output.flat_vector(dim);
                                     let coord_slice = coord_vector.as_mut_slice::<i64>();
-                                    for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                                        coord_slice[valid_rows + idx] = global_coords[dim] as i64;
+                                    for i in 0..batch_size {
+                                        let pos = (local_state.element_cursor + i) as u64;
+                                        coord_slice[valid_rows + i] = (g_start + (pos / stride) % dim_size) as i64;
                                     }
                                 }
                             } else {
                                 let mut coord_vector = output.flat_vector(dim);
                                 let coord_slice = coord_vector.as_mut_slice::<i64>();
-                                for (idx, (_, global_coords)) in batch.iter().enumerate() {
-                                    coord_slice[valid_rows + idx] = global_coords[dim] as i64;
+                                for i in 0..batch_size {
+                                    let pos = (local_state.element_cursor + i) as u64;
+                                    coord_slice[valid_rows + i] = (g_start + (pos / stride) % dim_size) as i64;
                                 }
                             }
                         }
                     }
 
                     if local_state.projected_columns.contains(&rank) {
-                        for (idx, (local_idx, _)) in batch.iter().enumerate() {
-                            let val = buffer
-                                .get(*local_idx)
+                        for i in 0..batch_size {
+                            let val = buffer.get(local_state.element_cursor + i)
                                 .ok_or("Malformed Zarr chunk: unexpected buffer size")?;
                             if Some(val.as_bytes()) == bind_data.fill_value_bytes.as_deref() {
-                                value_vector.set_null(valid_rows + idx);
+                                value_vector.set_null(valid_rows + i);
                             } else {
-                                value_vector.insert(valid_rows + idx, val.as_str());
+                                value_vector.insert(valid_rows + i, val.as_str());
                             }
                         }
                     }
 
                     valid_rows += batch_size;
-                    local_state.valid_cursor += batch_size;
-
-                    if local_state.valid_cursor >= local_state.precomputed_valid.as_ref().map_or(0, |v| v.len()) {
+                    local_state.element_cursor += batch_size;
+                    if local_state.element_cursor >= total {
                         local_state.current_chunk_buffer = None;
-                        local_state.precomputed_valid = None;
-                        local_state.valid_cursor = 0;
                     }
 
-                    if valid_rows > 0 {
-                        break;
-                    }
+                    if valid_rows > 0 { break; }
                 }
 
                 output.set_len(valid_rows);
@@ -1066,33 +987,6 @@ fn increment_chunk_grid(
     false // All dimensions carried over, we are out of bounds (exhausted)
 }
 
-#[allow(dead_code)] // Will be used in Task 3
-fn calculate_global_indices(
-    local_cursor: usize,
-    chunk_shape: &[u64],
-    chunk_grid: &[u64],
-) -> Vec<u64> {
-    let rank = chunk_shape.len();
-    let mut local_coords = vec![0; rank];
-    let mut remainder = local_cursor as u64;
-
-    // Calculate local coordinates (C-contiguous order, so we process from right to left)
-    for i in (0..rank).rev() {
-        let dim_size = chunk_shape[i];
-        local_coords[i] = remainder % dim_size;
-        remainder /= dim_size;
-    }
-
-    // Add global chunk offset
-    let mut global_coords = vec![0; rank];
-    for i in 0..rank {
-        global_coords[i] = chunk_grid[i]
-            .saturating_mul(chunk_shape[i])
-            .saturating_add(local_coords[i]);
-    }
-
-    global_coords
-}
 
 #[allow(dead_code)]
 fn translate_filter(
