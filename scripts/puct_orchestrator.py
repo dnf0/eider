@@ -180,6 +180,7 @@ Ensure the function signatures remain exactly identical to the original baseline
 
     def evaluate_node(self, node: PUCTNode) -> Optional[float]:
         print(f"Evaluating node: {node.node_id}")
+        node.eval_attempted = True
         
         backup_file = f"{self.target_file}.bak"
         if not os.path.exists(backup_file):
@@ -240,8 +241,13 @@ Ensure the function signatures remain exactly identical to the original baseline
 
     def is_exhausted(self, node_id: str) -> bool:
         node = self.nodes[node_id]
-        if node.visits > 0 and node.benchmark_time is None:
+        
+        # A node explicitly failed if we attempted to evaluate it but it got no benchmark time.
+        # For legacy nodes in the state file, we infer it was evaluated and failed if it has visits but no children.
+        eval_attempted = getattr(node, "eval_attempted", node.benchmark_time is not None or (node.visits > 0 and not node.children))
+        if eval_attempted and node.benchmark_time is None:
             return True
+            
         if node.children:
             return all(self.is_exhausted(c) for c in node.children)
         return False
