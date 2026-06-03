@@ -8,3 +8,9 @@ target_docker/
 docs/book/
 .envrc
 .env
+extension/candidates/
+*.log
+*.pid
+test_genai_async.py
+get_logs.sh
+fix_scores.py
