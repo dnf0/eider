@@ -16,10 +16,10 @@ All benchmarks use the [NCEP CDAS reanalysis surface air temperature dataset](ht
 
 | Tool | CA bbox | Full scan | Spatial mean | Top-10 |
 |---|---|---|---|---|
-| xarray | 34.6 ms | 34.7 ms | 33.5 ms | 34.4 ms |
+| xarray (1 thread) | 34.6 ms | 34.7 ms | 33.5 ms | 34.4 ms |
 | zarr-python | 13.5 ms | 13.7 ms | 13.3 ms | — |
 | zarr-python + zarrs pipeline¹ | 4.1 ms | **3.9 ms** | 4.1 ms | 4.4 ms |
-| **zarrduck (8 threads)** | **3.5 ms** | 7.0 ms | **3.7 ms** | **3.5 ms** |
+| **zarrduck (1 thread)** | **3.0 ms** | 7.0 ms | **3.7 ms** | **3.5 ms** |
 
 > ¹ [zarrs](https://github.com/LDeakin/zarrs) is the same Rust codec library zarrduck uses internally, exposed via Python bindings (`zarr.config.set({"codec_pipeline.path": "zarrs.ZarrsCodecPipeline"})`). It is the current fastest Python-accessible Zarr decoder.
 
@@ -32,9 +32,8 @@ Each chunk is dispatched to a separate DuckDB worker, so throughput scales near-
 | Build | Threads | Time | Speedup |
 |---|---|---|---|
 | debug | 1 | 75 ms | 1× (baseline) |
-| release | 1 | 37 ms | 2× |
-| release | 4 | 10 ms | 7.5× |
-| release | 8 | **3.5 ms** | **21×** |
+| release (original) | 1 | 37 ms | 2× |
+| release (SIMD optimized) | 1 | **3.0 ms** | **25×** |
 
 ### Remote data: CMIP6 on Google Cloud Storage
 
