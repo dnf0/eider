@@ -59,13 +59,21 @@ fn print_extraction_plan(
     total_chunks: u64,
     total_bytes: u64,
     skip_prompts: bool,
+    mode: OutputMode,
 ) -> EyreResult<bool> {
     // Estimate network speed at a conservative 25 MB/s
     let estimated_seconds = total_bytes as f64 / (25.0 * 1024.0 * 1024.0);
 
-    println!("\nExtraction Plan:");
-    println!("- Target Area: {} chunks", total_chunks);
-    println!("- Data Volume: {:.2} MB", total_bytes as f64 / 1_048_576.0);
+    if mode.is_human() {
+        println!("\nExtraction Plan\n───────────────");
+    } else {
+        println!("### Extraction Plan");
+    }
+    let chunks_str = format!("{} chunks", total_chunks);
+    let vol_str = format!("{:.2} MB", total_bytes as f64 / 1_048_576.0);
+    println!("{}: {}", ui::format_key("Target Area", mode), ui::format_value(&chunks_str, mode));
+    println!("{}: {}", ui::format_key("Data Volume", mode), ui::format_value(&vol_str, mode));
+    println!();
     if estimated_seconds < 60.0 {
         println!(
             "- Estimated Time: {:.0} seconds (@ 25 MB/s)\n",
@@ -158,7 +166,7 @@ pub async fn run_extract(
         .wrap_err("Failed to execute planning query")?;
 
     if mode != OutputMode::AgentJson
-        && !print_extraction_plan(total_chunks, total_bytes, skip_prompts)?
+        && !print_extraction_plan(total_chunks, total_bytes, skip_prompts, mode)?
     {
         return Ok(());
     }
@@ -194,7 +202,7 @@ pub async fn run_extract(
     .wrap_err("Spatial extraction query failed")?;
     if let Some(pb) = spinner {
         pb.finish_and_clear();
-        println!("Extraction complete!");
+        println!("{}", ui::format_success("Extraction complete!", mode));
     }
 
     if mode == OutputMode::AgentJson {
