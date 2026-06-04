@@ -34,3 +34,19 @@ path = "src/test_async_zarrs3.rs"
 [[bin]]
 name = "test_async_metadata"
 path = "src/test_async_metadata.rs"
+
+[[bin]]
+name = "test_resolve_sync"
+path = "src/test_resolve_sync.rs"
+
+[[bin]]
+name = "test_metadata"
+path = "src/test_metadata.rs"
+
+[[bin]]
+name = "test_zarrs_fetch"
+path = "src/test_zarrs_fetch.rs"
+
+[[bin]]
+name = "test_opendal_blocking_read"
+path = "src/test_opendal_blocking_read.rs"
