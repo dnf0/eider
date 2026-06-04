@@ -74,22 +74,83 @@ pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
             u16::from_be_bytes(buffer[offset..offset + 2].try_into().unwrap())
         };
 
-        // Simplified value extraction for u32 values fitting inline
-        let val = if header.is_little_endian {
+        let typ = if header.is_little_endian {
+            u16::from_le_bytes(buffer[offset + 2..offset + 4].try_into().unwrap())
+        } else {
+            u16::from_be_bytes(buffer[offset + 2..offset + 4].try_into().unwrap())
+        };
+
+        let count = if header.is_little_endian {
+            u32::from_le_bytes(buffer[offset + 4..offset + 8].try_into().unwrap())
+        } else {
+            u32::from_be_bytes(buffer[offset + 4..offset + 8].try_into().unwrap())
+        };
+
+        let val_or_offset = if header.is_little_endian {
             u32::from_le_bytes(buffer[offset + 8..offset + 12].try_into().unwrap())
         } else {
             u32::from_be_bytes(buffer[offset + 8..offset + 12].try_into().unwrap())
         };
 
+        let extract_single_val = || -> u32 {
+            if typ == 3 {
+                // SHORT
+                if header.is_little_endian {
+                    u16::from_le_bytes(buffer[offset + 8..offset + 10].try_into().unwrap()) as u32
+                } else {
+                    u16::from_be_bytes(buffer[offset + 8..offset + 10].try_into().unwrap()) as u32
+                }
+            } else {
+                val_or_offset
+            }
+        };
+
+        let extract_array = |count: usize, offset_val: u32| -> Vec<u64> {
+            let mut res = Vec::with_capacity(count);
+            let mut ptr = offset_val as usize;
+            for _ in 0..count {
+                if ptr + 4 > buffer.len() { break; }
+                let v = if typ == 3 {
+                    let sv = if header.is_little_endian {
+                        u16::from_le_bytes(buffer[ptr..ptr+2].try_into().unwrap()) as u64
+                    } else {
+                        u16::from_be_bytes(buffer[ptr..ptr+2].try_into().unwrap()) as u64
+                    };
+                    ptr += 2;
+                    sv
+                } else {
+                    let lv = if header.is_little_endian {
+                        u32::from_le_bytes(buffer[ptr..ptr+4].try_into().unwrap()) as u64
+                    } else {
+                        u32::from_be_bytes(buffer[ptr..ptr+4].try_into().unwrap()) as u64
+                    };
+                    ptr += 4;
+                    lv
+                };
+                res.push(v);
+            }
+            res
+        };
+
         match tag {
-            256 => meta.image_width = val,
-            257 => meta.image_length = val,
-            322 => meta.tile_width = val,
-            323 => meta.tile_length = val,
-            // For true arrays, we would follow the pointer to extract Vec<u64>.
-            // Stubbed inline values for minimal implementation:
-            324 => meta.tile_offsets.push(val as u64),
-            325 => meta.tile_byte_counts.push(val as u64),
+            256 => meta.image_width = extract_single_val(),
+            257 => meta.image_length = extract_single_val(),
+            322 => meta.tile_width = extract_single_val(),
+            323 => meta.tile_length = extract_single_val(),
+            324 => {
+                if count == 1 {
+                    meta.tile_offsets.push(extract_single_val() as u64);
+                } else {
+                    meta.tile_offsets = extract_array(count as usize, val_or_offset);
+                }
+            }
+            325 => {
+                if count == 1 {
+                    meta.tile_byte_counts.push(extract_single_val() as u64);
+                } else {
+                    meta.tile_byte_counts = extract_array(count as usize, val_or_offset);
+                }
+            }
             _ => {}
         }
         offset += 12;

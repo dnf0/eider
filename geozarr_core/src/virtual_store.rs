@@ -6,18 +6,18 @@ use zarrs::storage::{ListableStorageTraits, ReadableStorageTraits, StoreKey, Sto
 
 pub struct VirtualCogStore {
     operator: opendal::Operator,
+    filename: String,
     meta: CogMetadata,
     zmetadata_bytes: Bytes,
 }
 
 impl VirtualCogStore {
-    pub fn new(operator: opendal::Operator, meta: CogMetadata) -> Self {
-        // Synthesize a .zmetadata JSON
+    pub fn new(operator: opendal::Operator, filename: String, meta: CogMetadata) -> Self {
+        // Synthesize a .zmetadata JSON for a root array
         let json = format!(
             r#"{{
             "metadata": {{
-                ".zgroup": {{ "zarr_format": 2 }},
-                "data/.zarray": {{
+                ".zarray": {{
                     "zarr_format": 2,
                     "shape": [{}, {}],
                     "chunks": [{}, {}],
@@ -35,6 +35,7 @@ impl VirtualCogStore {
 
         Self {
             operator,
+            filename,
             meta,
             zmetadata_bytes: Bytes::from(json),
         }
@@ -46,30 +47,42 @@ impl ReadableStorageTraits for VirtualCogStore {
         if key.as_str() == ".zmetadata" {
             return Ok(Some(self.zmetadata_bytes.clone()));
         }
+        if key.as_str() == ".zarray" {
+            let json = format!(
+                r#"{{
+                "zarr_format": 2,
+                "shape": [{}, {}],
+                "chunks": [{}, {}],
+                "dtype": "<f4",
+                "compressor": null,
+                "fill_value": "NaN",
+                "filters": null,
+                "order": "C"
+            }}"#,
+                self.meta.image_length, self.meta.image_width, self.meta.tile_length, self.meta.tile_width
+            );
+            return Ok(Some(Bytes::from(json)));
+        }
 
-        if key.as_str().starts_with("data/") {
-            // "data/0.0"
-            let parts: Vec<&str> = key.as_str().split('/').collect();
-            if parts.len() == 2 {
-                let chunks: Vec<&str> = parts[1].split('.').collect();
-                if chunks.len() == 2 {
-                    let y: usize = chunks[0].parse().unwrap_or(0);
-                    let x: usize = chunks[1].parse().unwrap_or(0);
+        let chunks: Vec<&str> = key.as_str().split('.').collect();
+        if chunks.len() == 2 {
+            if let (Ok(y), Ok(x)) = (chunks[0].parse::<usize>(), chunks[1].parse::<usize>()) {
 
-                    let grid_width = (self.meta.image_width as f64 / self.meta.tile_width as f64)
-                        .ceil() as usize;
-                    let flat_idx = y * grid_width + x;
+            let grid_width = (self.meta.image_width as f64 / self.meta.tile_width as f64)
+                .ceil() as usize;
+            let flat_idx = y * grid_width + x;
 
                     if flat_idx < self.meta.tile_offsets.len() {
                         let offset = self.meta.tile_offsets[flat_idx];
                         let length = self.meta.tile_byte_counts[flat_idx];
 
                         let op = self.operator.clone();
+                        let fname = self.filename.clone();
                         let range = offset..offset + length;
                         // Spawning a new thread to block on the async read
                         let bytes_res = std::thread::spawn(move || {
                             let rt = tokio::runtime::Runtime::new().unwrap();
-                            rt.block_on(async { op.read_with("").range(range).await })
+                            rt.block_on(async { op.read_with(&fname).range(range).await })
                                 .map_err(|e| e.to_string())
                         })
                         .join()
@@ -79,7 +92,6 @@ impl ReadableStorageTraits for VirtualCogStore {
                             return Ok(Some(Bytes::from(bytes.to_vec())));
                         }
                     }
-                }
             }
         }
         Ok(None)

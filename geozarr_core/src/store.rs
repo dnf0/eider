@@ -33,6 +33,7 @@ pub fn resolve_sync_store(
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
             Arc::new(crate::virtual_store::VirtualCogStore::new(
                 async_operator,
+                "".to_string(),
                 meta,
             ))
         } else {
@@ -63,6 +64,7 @@ pub fn resolve_sync_store(
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
             Arc::new(crate::virtual_store::VirtualCogStore::new(
                 async_operator,
+                "".to_string(),
                 meta,
             ))
         } else {
@@ -89,12 +91,15 @@ pub fn resolve_sync_store(
         }
 
         let store: Arc<dyn ReadableStorageTraits> = if is_cog {
-            let builder = opendal::services::Fs::default().root(canonical_path.to_str().unwrap());
+            let parent = canonical_path.parent().unwrap();
+            let filename = canonical_path.file_name().unwrap().to_str().unwrap().to_string();
+            let builder = opendal::services::Fs::default().root(parent.to_str().unwrap());
             let async_operator = opendal::Operator::new(builder)?.finish();
             let async_op_clone = async_operator.clone();
+            let fname_clone = filename.clone();
             let header_res = std::thread::spawn(move || {
                 let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async { async_op_clone.read_with("").range(0..16384).await })
+                rt.block_on(async { async_op_clone.read_with(&fname_clone).range(0..16384).await })
                     .map_err(|e| e.to_string())
             })
             .join()
@@ -104,6 +109,7 @@ pub fn resolve_sync_store(
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
             Arc::new(crate::virtual_store::VirtualCogStore::new(
                 async_operator,
+                filename,
                 meta,
             ))
         } else {
