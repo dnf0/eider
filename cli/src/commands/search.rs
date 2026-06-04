@@ -82,11 +82,15 @@ fn extract_assets(
                     desc.push_str("...");
                 }
 
-                let display = if desc.is_empty() {
+                let mut display = if desc.is_empty() {
                     title.bold().cyan().to_string()
                 } else {
                     format!("{} - {}", title.bold().cyan(), desc.italic())
                 };
+
+                if found_options.len() % 2 == 1 {
+                    display = display.on_truecolor(30, 30, 30).to_string();
+                }
 
                 found_options.push(SelectOption {
                     id: href.to_string(),
@@ -139,7 +143,17 @@ fn get_selected_api(
     }
 
     let providers = stac::get_stac_providers(config);
-    let mut select = inquire::Select::new("Select a STAC Provider:", providers);
+    let mut provider_options = Vec::new();
+    for (i, p) in providers.iter().enumerate() {
+        let mut display = p.to_string();
+        if i % 2 == 1 {
+            display = display.on_truecolor(30, 30, 30).to_string();
+        }
+        let id = p.split(" - ").next().unwrap().to_string();
+        provider_options.push(SelectOption { id, display });
+    }
+
+    let mut select = inquire::Select::new("Select a STAC Provider:", provider_options);
     select.scorer = &|input, _, string_value, _| {
         let input = input.to_lowercase();
         let val = string_value.to_lowercase();
@@ -151,7 +165,7 @@ fn get_selected_api(
     };
     let selection = select.prompt()?;
 
-    Ok(selection.split(" - ").next().unwrap().to_string())
+    Ok(selection.id)
 }
 
 async fn get_selected_collection(
@@ -219,11 +233,15 @@ async fn get_selected_collection(
                     desc.push_str("...");
                 }
 
-                let display = if desc.is_empty() {
+                let mut display = if desc.is_empty() {
                     title.bold().cyan().to_string()
                 } else {
                     format!("{} - {}", title.bold().cyan(), desc.italic())
                 };
+
+                if collection_options.len() % 2 == 1 {
+                    display = display.on_truecolor(30, 30, 30).to_string();
+                }
                 collection_options.push(SelectOption {
                     id: id.to_string(),
                     display,
