@@ -67,7 +67,7 @@ Geospatial and climate data are frequently stored in Zarr format because it enab
 
 This project bridges the gap with two tools:
 1. **The DuckDB Extension:** Natively streams remote Zarr chunks directly into DuckDB's vectorized execution engine for lightning-fast reads.
-2. **`geozarr-cli`:** A companion CLI tool that executes SQL against your data and asynchronously uploads the results back to cloud storage as an N-dimensional Zarr array.
+2. **`eider` CLI:** A companion CLI tool that serves as an agentic spatial data engine for GeoZarr and DuckDB. It allows users to discover dataset metadata (`eider info`) and extract Zarr data intersecting with vector polygons (`eider extract`).
 
 ### Key Features
 - **Zero-Copy Streaming**: Chunks are loaded, decompressed, and decoded natively inside DuckDB's engine.
