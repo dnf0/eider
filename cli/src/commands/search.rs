@@ -96,8 +96,8 @@ fn get_selected_api(
     if let Some(a) = api {
         return Ok(a);
     }
-    if mode == OutputMode::AgentJson {
-        return Err(eyre!("--api is required when using --output=json"));
+    if !mode.is_human() {
+        return Err(eyre!("--api is required in non-interactive mode"));
     }
 
     let providers = stac::get_stac_providers(config);
@@ -181,13 +181,20 @@ async fn get_selected_collection(
     if collection_ids.is_empty() {
         return Err(eyre!("No collections found at {}", collections_url));
     }
-    if mode == OutputMode::AgentJson {
-        let json_out = serde_json::json!({
-            "status": "success",
-            "collections": collection_ids
-        });
-        println!("{}", json_out);
-        return Ok(None);
+    if !mode.is_human() {
+        if mode == OutputMode::AgentJson {
+            let json_out = serde_json::json!({
+                "status": "success",
+                "collections": collection_ids
+            });
+            println!("{}", json_out);
+            return Ok(None);
+        } else {
+            return Err(eyre!(
+                "--collection is required in non-interactive mode. Available collections: {:?}",
+                collection_ids
+            ));
+        }
     }
 
     let mut select =
@@ -239,7 +246,7 @@ pub async fn run_search(
             search_api = format!("{}/search", search_api.trim_end_matches('/'));
         }
 
-        if mode != OutputMode::AgentJson {
+        if mode.is_human() {
             println!("Querying STAC API: {}", search_api);
         }
 
@@ -262,8 +269,14 @@ pub async fn run_search(
 
         let (found_uris, found_options) = parse_search_results(&stac_response);
 
-        if mode == OutputMode::AgentJson {
-            output_json_results(&found_uris);
+        if !mode.is_human() {
+            if mode == OutputMode::AgentJson {
+                output_json_results(&found_uris);
+            } else {
+                for uri in &found_uris {
+                    println!("{}", uri);
+                }
+            }
             break;
         } else if found_uris.is_empty() {
             println!(
