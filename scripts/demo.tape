@@ -11,10 +11,10 @@ Type "export PATH=$PWD/target/debug:$PATH"
 Enter
 Type "rm -f *.duckdb"
 Enter
-Type "python3 scripts/mock_stac.py 8080 &"
+Type "python3 scripts/mock_stac.py 8123 &"
 Enter
 Sleep 1s
-Type "export EIDER_LOCAL_STAC='http://localhost:8080 - Local Demo Catalog'"
+Type "export EIDER_LOCAL_STAC='http://localhost:8123 - Local Demo Catalog'"
 Enter
 Type "clear"
 Enter
