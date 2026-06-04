@@ -30,10 +30,10 @@ class PUCTNode:
         self.node_id = node_id
         self.code_content = code_content
         self.parent_id = parent_id
-        
+
         self.benchmark_time: Optional[float] = None
         self.test_passed: bool = False
-        
+
         self.visits = 0
         self.total_value = 0.0
         self.prior_prob = prior_prob
@@ -83,14 +83,14 @@ class PUCTOrchestrator:
         self.state_file = state_file
         self.target_file = target_file
         self.nodes: Dict[str, PUCTNode] = {}
-        
+
         client_kwargs = {}
         if not os.environ.get("GEMINI_API_KEY"):
             client_kwargs = {
                 "vertexai": True,
                 "location": os.environ.get("VERTEX_LOCATION", "eu-west1")
             }
-        
+
         try:
             self.client = genai.Client(**client_kwargs)
             self.model_id = os.environ.get("VERTEX_MODEL_ID", "gemini-2.5-flash")
@@ -98,7 +98,7 @@ class PUCTOrchestrator:
         except Exception as e:
             print(f"Failed to initialize GenAI Client: {e}")
             sys.exit(1)
-            
+
         self.load_state()
 
     def load_state(self):
@@ -106,12 +106,12 @@ class PUCTOrchestrator:
         if os.path.exists(self.state_file):
             with open(self.state_file, 'r') as f:
                 data = json.load(f)
-                
+
                 # Load metadata if present
                 if "_meta" in data:
                     self.state_meta = OrchestratorState(**data["_meta"])
                     del data["_meta"]
-                    
+
                 for node_id, node_data in data.items():
                     self.nodes[node_id] = PUCTNode.from_dict(node_data)
             print(f"Loaded {len(self.nodes)} nodes from state file.")
@@ -128,15 +128,15 @@ class PUCTOrchestrator:
     def _init_root(self):
         with open(self.target_file, 'r') as f:
             base_code = f.read()
-        
+
         root = PUCTNode(node_id="root", code_content=base_code)
         self.nodes["root"] = root
-        
+
         time_us = self.evaluate_node(root)
         if time_us:
             root.benchmark_time = time_us
             root.test_passed = True
-            
+
         self.save_state()
 
     async def self_correct_node(self, node: PUCTNode, error_log: str) -> bool:
@@ -175,7 +175,7 @@ Ensure the function signatures remain exactly identical to the original baseline
             )
             if not response.text:
                 return False
-                
+
             cand = OptimizationCandidate.model_validate_json(response.text)
             print(f"  Self-correction generated new code (Strategy: {cand.strategy}).")
             node.code_content = cand.patch_code
@@ -187,29 +187,29 @@ Ensure the function signatures remain exactly identical to the original baseline
     def evaluate_node(self, node: PUCTNode) -> Optional[float]:
         print(f"Evaluating node: {node.node_id}")
         node.eval_attempted = True
-        
+
         backup_file = f"{self.target_file}.bak"
         if not os.path.exists(backup_file):
             shutil.copy(self.target_file, backup_file)
-            
+
         try:
             max_retries = 2
             for attempt in range(max_retries + 1):
                 with open(self.target_file, 'w') as f:
                     f.write(node.code_content)
-                    
+
                 print(f"  Running tests (Attempt {attempt+1}/{max_retries+1})...")
                 test_res = subprocess.run(
                     ["cargo", "test", "-p", "eider_extension", "test_populate_coordinate_batch"],
                     capture_output=True, text=True, cwd="extension", timeout=EVAL_TIMEOUT_SECS
                 )
-                
+
                 if test_res.returncode == 0:
                     break # Tests passed!
-                    
+
                 error_log = test_res.stderr if "error:" in test_res.stderr or "error[" in test_res.stderr else test_res.stdout
                 print(f"  Tests FAILED. Length of error log: {len(error_log)} chars")
-                
+
                 if attempt < max_retries:
                     # Try to fix it!
                     success = asyncio.run(self.self_correct_node(node, error_log))
@@ -219,13 +219,13 @@ Ensure the function signatures remain exactly identical to the original baseline
                 else:
                     print("  Max retries reached. Rejecting candidate.")
                     return None
-                
+
             print("  Running benchmark...")
             bench_res = subprocess.run(
                 ["cargo", "bench", "-p", "eider_extension"],
                 capture_output=True, text=True, cwd="extension", timeout=EVAL_TIMEOUT_SECS
             )
-            
+
             import re
             match = re.search(r'time:\s+\[.*?([0-9.]+) µs .*?\]', bench_res.stdout)
             if match:
@@ -235,7 +235,7 @@ Ensure the function signatures remain exactly identical to the original baseline
             else:
                 print("  Failed to parse benchmark time.")
                 return None
-                
+
         except subprocess.TimeoutExpired:
             print("  Evaluation timed out.")
             return None
@@ -247,13 +247,13 @@ Ensure the function signatures remain exactly identical to the original baseline
 
     def is_exhausted(self, node_id: str) -> bool:
         node = self.nodes[node_id]
-        
+
         # A node explicitly failed if we attempted to evaluate it but it got no benchmark time.
         # For legacy nodes in the state file, we infer it was evaluated and failed if it has visits but no children.
         eval_attempted = getattr(node, "eval_attempted", node.benchmark_time is not None or (node.visits > 0 and not node.children))
         if eval_attempted and node.benchmark_time is None:
             return True
-            
+
         if node.children:
             return all(self.is_exhausted(c) for c in node.children)
         return False
@@ -264,22 +264,22 @@ Ensure the function signatures remain exactly identical to the original baseline
             best_score = -float('inf')
             best_child = None
             parent_visits = self.nodes[current].visits
-            
+
             for child_id in self.nodes[current].children:
                 if self.is_exhausted(child_id):
                     continue
-                    
+
                 child = self.nodes[child_id]
                 score = child.puct_score(parent_visits)
                 if score > best_score:
                     best_score = score
                     best_child = child_id
-                    
+
             if best_child:
                 current = best_child
             else:
                 break
-                
+
         return current
 
     async def generate_single_candidate(self, prompt: str, index: int) -> Optional[OptimizationCandidate]:
@@ -304,7 +304,7 @@ Ensure the function signatures remain exactly identical to the original baseline
     async def expand_async(self, parent_id: str) -> List[str]:
         print(f"Expanding node: {parent_id}")
         parent_node = self.nodes[parent_id]
-        
+
         dimensions = [
             "Instruction Level (e.g., bit-twiddling hacks, branchless arithmetic, lookup tables)",
             "Vectorization (e.g., explicit std::simd intrinsics, auto-vectorization friendly hints like chunking)",
@@ -315,12 +315,12 @@ Ensure the function signatures remain exactly identical to the original baseline
             "Data Locality (e.g., blocking, tiling, strided access patterns)",
             "Register Pressure (e.g., minimizing local variables, reusing accumulators)"
         ]
-        
+
         # Limit concurrent API calls to avoid triggering Vertex AI rate limits
         # which can cause the SDK to silently hang during exponential backoff.
         # Increased to 4 to balance speed and rate limits.
         sem = asyncio.Semaphore(4)
-        
+
         async def _generate_with_dim(i: int):
             print(f"  Queuing candidate {i} for generation...")
             async with sem:
@@ -350,32 +350,32 @@ Ensure the function signatures remain exactly identical. Return the ENTIRE modif
 
         tasks = [_generate_with_dim(i) for i in range(MAX_EXPANSIONS_PER_NODE)]
         results = await asyncio.gather(*tasks)
-        
+
         valid_children = []
         for i, cand in enumerate(results):
             if cand is None:
                 continue
-                
+
             node_id = f"{parent_id}_child_{i+1}"
             print(f"  Generated candidate: {node_id} (Strategy: {cand.strategy})")
-            
+
             new_node = PUCTNode(
-                node_id=node_id, 
-                code_content=cand.patch_code, 
+                node_id=node_id,
+                code_content=cand.patch_code,
                 parent_id=parent_id,
                 prior_prob=cand.prior_prob
             )
-            
+
             self.nodes[node_id] = new_node
             self.nodes[parent_id].children.append(node_id)
             valid_children.append(node_id)
-            
+
         self.save_state()
         return valid_children
 
     def backpropagate(self, node_id: str, time_us: Optional[float]):
         root_time = self.nodes["root"].benchmark_time or 170.0
-        
+
         value = -1.0
         if time_us is not None:
             speedup_ratio = (root_time - time_us) / root_time
@@ -383,23 +383,23 @@ Ensure the function signatures remain exactly identical. Return the ENTIRE modif
                 value = min(1.0, speedup_ratio)
             else:
                 value = max(-1.0, speedup_ratio)
-                
+
         current = node_id
         while current is not None:
             node = self.nodes[current]
             node.visits += 1
             node.total_value += value
             current = node.parent_id
-            
+
         self.save_state()
 
     def run_step(self) -> bool:
         leaf_id = self.select()
-        
+
         if self.is_exhausted(leaf_id):
             print(f"Node {leaf_id} is fully exhausted. Treating as a dead end.")
             return False
-            
+
         if not self.nodes[leaf_id].children:
             # Run async expansion
             new_children = asyncio.run(self.expand_async(leaf_id))
@@ -410,13 +410,13 @@ Ensure the function signatures remain exactly identical. Return the ENTIRE modif
             child_to_eval = new_children[0]
         else:
             child_to_eval = leaf_id
-            
+
         node_to_eval = self.nodes[child_to_eval]
-        
+
         time_us = self.evaluate_node(node_to_eval)
         node_to_eval.benchmark_time = time_us
         self.state_meta.total_evaluations += 1
-        
+
         if time_us:
             node_to_eval.test_passed = True
             if time_us < self.state_meta.best_time:
@@ -427,38 +427,38 @@ Ensure the function signatures remain exactly identical. Return the ENTIRE modif
                 self.state_meta.steps_without_improvement += 1
         else:
             self.state_meta.steps_without_improvement += 1
-            
+
         self.backpropagate(child_to_eval, time_us)
         return True
 
     def run_loop(self, max_evaluations: int = 1000, max_stagnation: int = 150):
         print(f"\n🚀 Starting MCTS Optimization Loop 🚀")
         print(f"Termination Conditions: {max_evaluations} max evaluations OR {max_stagnation} steps without improvement.\n")
-        
+
         while True:
             if self.state_meta.total_evaluations >= max_evaluations:
                 print(f"\n🛑 Terminating: Reached maximum evaluation budget of {max_evaluations}.")
                 break
-                
+
             if self.state_meta.steps_without_improvement >= max_stagnation:
                 print(f"\n🛑 Terminating: Stagnated. No improvement in {max_stagnation} consecutive evaluations.")
                 break
-                
+
             print(f"\n--- [ Evaluation {self.state_meta.total_evaluations} / {max_evaluations} ] ---")
             print(f"Current Best Time: {self.state_meta.best_time if self.state_meta.best_time != float('inf') else 'None'} µs")
             print(f"Stagnation Counter: {self.state_meta.steps_without_improvement} / {max_stagnation}")
             print(f"Nodes in Tree: {len(self.nodes)}\n")
-            
+
             if not self.run_step():
                 print("\n🛑 Terminating: Search space fully exhausted. All paths lead to dead ends.")
                 break
-            
+
         print("\n🏆 --- FINAL OPTIMIZATION LEADERBOARD --- 🏆")
         best_nodes = sorted(
             [n for n in self.nodes.values() if n.test_passed and n.benchmark_time is not None],
             key=lambda x: x.benchmark_time
         )[:5]
-        
+
         for i, n in enumerate(best_nodes):
             print(f"{i+1}. Node {n.node_id} - {n.benchmark_time} µs (Visits: {n.visits})")
 
@@ -467,7 +467,7 @@ if __name__ == "__main__":
         state_file="extension/candidates/mcts_state.json",
         target_file="extension/src/vector_writer.rs"
     )
-    
+
     # Init the best time if we loaded from state
     if orchestrator.state_meta.best_time == float('inf'):
         best = float('inf')
@@ -477,4 +477,3 @@ if __name__ == "__main__":
         orchestrator.state_meta.best_time = best
 
     orchestrator.run_loop(max_evaluations=1000, max_stagnation=150)
-

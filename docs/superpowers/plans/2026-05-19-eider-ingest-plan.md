@@ -23,14 +23,14 @@ Update the `Commands` enum in `cli/src/main.rs` to add the `Ingest` variant:
     Ingest {
         /// The local file to ingest
         input_file: String,
-        
+
         /// The destination Zarr URI
         output_zarr_uri: String,
-        
+
         /// Optional JSON string to override automatic chunk sizes (e.g., '{"time": 30}')
         #[arg(long)]
         chunks: Option<String>,
-        
+
         /// Optional name for the value column (defaults to "value")
         #[arg(long)]
         value_column: Option<String>,
@@ -47,21 +47,21 @@ In the `run_cli` match block, add the arm for `Ingest`:
             }
 
             let conn = setup_duckdb(config.s3.as_ref())?;
-            
+
             if resolved_output != OutputFormat::Json {
                 println!("Loading DuckDB spatial extension...");
             }
             conn.execute("INSTALL spatial", []).wrap_err("Failed to install spatial extension")?;
             conn.execute("LOAD spatial", []).wrap_err("Failed to load spatial extension")?;
-            
+
             if resolved_output != OutputFormat::Json {
                 println!("Reading legacy file into DuckDB...");
             }
-            
+
             // Create a view wrapping the ST_Read call to treat it as a table
             let view_query = format!("CREATE VIEW temp_ingest AS SELECT * EXCLUDE (geom) FROM ST_Read('{}')", input_file.replace("'", "''"));
             conn.execute(&view_query, []).wrap_err("Failed to execute ST_Read on input file")?;
-            
+
             println!("Ingestion command structure setup complete.");
         }
 ```
@@ -92,10 +92,10 @@ Add a helper function to calculate optimal chunks aiming for ~25MB chunks:
 fn auto_calculate_chunks(conn: &duckdb::Connection, table: &str) -> EyreResult<serde_json::Value> {
     // Very simple heuristic for demonstration. Real implementation would query min/max of coords.
     // For this prototype, we'll assign a flat default if we can't infer smartly.
-    
+
     let mut stmt = conn.prepare(&format!("DESCRIBE \"{}\"", table.replace("\"", "\"\"")))?;
     let mut rows = stmt.query([])?;
-    
+
     let mut map = serde_json::Map::new();
     while let Some(row) = rows.next()? {
         let col_name: String = row.get(0)?;
@@ -108,7 +108,7 @@ fn auto_calculate_chunks(conn: &duckdb::Connection, table: &str) -> EyreResult<s
             map.insert(col_name, serde_json::json!(10)); // Default temporal chunk
         }
     }
-    
+
     Ok(serde_json::Value::Object(map))
 }
 ```
@@ -118,18 +118,18 @@ fn auto_calculate_chunks(conn: &duckdb::Connection, table: &str) -> EyreResult<s
 Update the `Commands::Ingest` arm after creating the `temp_ingest` view:
 ```rust
             let mut final_chunks = auto_calculate_chunks(&conn, "temp_ingest")?;
-            
+
             if let Some(user_chunks_str) = chunks {
                 let user_chunks: serde_json::Value = serde_json::from_str(&user_chunks_str)
                     .wrap_err("Failed to parse user --chunks flag as JSON")?;
-                
+
                 if let Some(user_obj) = user_chunks.as_object() {
                     for (k, v) in user_obj {
                         final_chunks.as_object_mut().unwrap().insert(k.clone(), v.clone());
                     }
                 }
             }
-            
+
             if resolved_output != OutputFormat::Json {
                 println!("Calculated chunk shape: {}", final_chunks.to_string());
             }
@@ -171,7 +171,7 @@ async fn run_export(
     // Copy the entire body of Commands::Export here.
     // Replace `cli.output` with `resolved_output`.
     // Ensure all `?` returns propagate `EyreResult`.
-    
+
     // (Note: The user will need to meticulously extract the huge Export block.
     // The implementation should verify all imports and variable bindings match).
     Ok(())
@@ -191,7 +191,7 @@ async fn run_export(
             } else {
                 setup_duckdb(config.s3.as_ref())?
             };
-            
+
             run_export(&conn, &query, &output, &value_column, chunks, &resolved_output).await?;
         }
 ```
@@ -202,13 +202,13 @@ Append to `Commands::Ingest` after the chunk calculation:
 ```rust
             let val_col = value_column.unwrap_or_else(|| "value".to_string());
             let query = "SELECT * FROM temp_ingest";
-            
+
             if resolved_output != OutputFormat::Json {
                 println!("Starting streaming export to Zarr...");
             }
-            
+
             run_export(&conn, query, &output_zarr_uri, &val_col, Some(final_chunks.to_string()), &resolved_output).await?;
-            
+
             if resolved_output == OutputFormat::Json {
                 println!(r#"{{"status": "success", "uri": "{}"}}"#, output_zarr_uri);
             } else {

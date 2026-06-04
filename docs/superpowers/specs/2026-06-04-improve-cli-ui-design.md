@@ -2,7 +2,7 @@
 
 ## 1. Core Architecture & Environment Detection
 
-**Context:** The Eider CLI needs to serve two distinct audiences: human users running commands in interactive terminals, and LLM agents executing commands via scripts or pipes. 
+**Context:** The Eider CLI needs to serve two distinct audiences: human users running commands in interactive terminals, and LLM agents executing commands via scripts or pipes.
 
 **Design:**
 - Introduce a global "Output Mode" context leveraging the `is-terminal` crate (or `std::io::IsTerminal`).

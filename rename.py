@@ -7,7 +7,7 @@ def replace_in_file(filepath):
             content = f.read()
     except Exception:
         return False
-        
+
     new_content = content.replace('zarrduck', 'eider').replace('Zarrduck', 'Eider').replace('ZARRDUCK', 'EIDER')
     if new_content != content:
         with open(filepath, 'w', encoding='utf-8') as f:
@@ -22,4 +22,3 @@ for file in files:
     if os.path.isfile(file):
         if replace_in_file(file):
             print(f"Updated {file}")
-

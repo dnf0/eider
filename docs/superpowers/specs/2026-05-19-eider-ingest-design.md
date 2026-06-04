@@ -3,7 +3,7 @@
 **Date:** 2026-05-19
 
 ## 1. Context & Purpose
-Phase 3 of the Eider Future Roadmap introduces the Data Ingestion Engine. While the CLI currently excels at reading and extracting from Zarr, users often need to convert legacy geospatial formats (like NetCDF, GeoTIFF, or CSV) into cloud-native Zarr. 
+Phase 3 of the Eider Future Roadmap introduces the Data Ingestion Engine. While the CLI currently excels at reading and extracting from Zarr, users often need to convert legacy geospatial formats (like NetCDF, GeoTIFF, or CSV) into cloud-native Zarr.
 
 The purpose of this sub-project is to build the `eider ingest` command, effectively turning the CLI into an ETL pipeline. It will leverage DuckDB's spatial extensions to ingest legacy files and use our robust export engine to write them to S3 as GeoZarr, utilizing a hybrid auto-chunking strategy.
 
@@ -21,7 +21,7 @@ We will add a new `ingest` subcommand to the `eider` CLI.
 ### 2.2 Execution Flow
 1. **Data Ingestion:** The CLI initializes an in-memory DuckDB connection, loads the `spatial` extension, and imports the `<input_file>` using DuckDB's `ST_Read()` or relevant spatial table functions.
 2. **Schema Introspection:** The CLI analyzes the imported data to infer dimensions (time, lat, lon) and their overall shapes.
-3. **Hybrid Auto-Chunking:** 
+3. **Hybrid Auto-Chunking:**
    - The CLI heuristically calculates optimal chunk sizes (aiming for 10MB–50MB per chunk) based on the total dimensions to balance spatial vs. temporal query performance.
    - If the user provides the `--chunks` flag, those specific values override the heuristically derived chunk shapes.
 4. **Metadata Generation:** The CLI constructs valid GeoZarr metadata, including `_ARRAY_DIMENSIONS` and any inferred spatial affine transformations.

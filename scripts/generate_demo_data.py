@@ -20,19 +20,19 @@ def main():
 
     print("Converting NetCDF to Zarr...")
     ds = xr.open_dataset(nc_path, engine='netcdf4')
-    
+
     # Convert longitude from 0-360 to -180 to 180 to match standard geojson/stac
     ds.coords['lon'] = (ds.coords['lon'] + 180) % 360 - 180
     ds = ds.sortby(ds.lon)
 
     # Optional: we can chunk it nicely
     ds = ds.chunk({'time': 12, 'lat': 73, 'lon': 144})
-    
+
     # Let's quickly ensure the arrays map well for eider
     # We rename 'air' to 'air_temperature' so it matches the tape
     if 'air' in ds:
         ds = ds.rename({'air': 'air_temperature'})
-    
+
     # Write to Zarr
     ds.to_zarr(store_path, mode='w', consolidated=True)
 

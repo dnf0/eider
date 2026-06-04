@@ -189,9 +189,9 @@ pub async fn run_extract(
 
     // The magic query: Create a table by joining the GeoZarr pixels that intersect the vector polygons
     let query = format!(
-        "CREATE OR REPLACE TABLE extracted_data AS 
-                 SELECT z.*, v.* EXCLUDE (geom) 
-                 FROM read_zarr(?, lon_min=?, lat_min=?, lon_max=?, lat_max=?{}) z, ST_Read(?) v 
+        "CREATE OR REPLACE TABLE extracted_data AS
+                 SELECT z.*, v.* EXCLUDE (geom)
+                 FROM read_zarr(?, lon_min=?, lat_min=?, lon_max=?, lat_max=?{}) z, ST_Read(?) v
                  WHERE ST_Contains(v.geom, ST_Point(z.lon, z.lat))",
         pins_str
     );

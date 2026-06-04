@@ -19,7 +19,7 @@ Introduce a "pinning" mechanism where users can specify a fixed index or coordin
 - If a dimension exists in `pinned_dimensions`, its `bounds_min` and `bounds_max` should both be set to the pinned index. This effectively flattens that dimension during iteration.
 
 ### 3. DuckDB Adapter (`eider_extension`)
-- Expose pinning parameters in the `read_zarr` table function. 
+- Expose pinning parameters in the `read_zarr` table function.
 - Example API: `SELECT * FROM read_zarr('data.zarr', altitude_index := 5, ensemble_member := 0)`.
 - In `ReadZarrVTab::bind`, parse these dynamic named parameters. If a parameter matches a dimension name (but isn't a `_min`/`_max` bounds query), treat it as a dimension pin.
 - Pass the parsed pins to `dataset.compute_bounds()`.

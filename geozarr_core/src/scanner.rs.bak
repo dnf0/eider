@@ -147,7 +147,7 @@ mod tests {
         let store = Arc::new(MemoryStore::new());
         let shape = vec![10, 10];
         let chunk_shape = vec![5, 5];
-        
+
         let array_write = ArrayBuilder::new(
             shape.clone(),
             DataType::Float32,
@@ -159,7 +159,7 @@ mod tests {
 
         let mut chunk_data = vec![0.0f32; 25];
         for i in 0..25 { chunk_data[i] = i as f32; }
-        
+
         array_write.store_metadata().unwrap();
         array_write.store_chunk_elements(&[0, 0], &chunk_data).unwrap();
 
@@ -167,13 +167,13 @@ mod tests {
         let array = Array::open(ro_store, "/test").unwrap();
 
         let reader = ChunkReader::new(Arc::new(array), true, shape, chunk_shape);
-        
+
         let (elements, info) = reader.read_chunk_subset::<f32>(
             &[0, 0],
             &[1, 1], // bounds_min
             &[3, 3], // bounds_max
         ).unwrap();
-        
+
         assert_eq!(info.shape, vec![3, 3]);
         // The chunk data is 5x5:
         // [ 0,  1,  2,  3,  4]

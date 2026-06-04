@@ -133,7 +133,7 @@ async fn run_cli(mut cli: Cli, config: EiderConfig) -> EyreResult<()> {
 
     // Provide a dummy output assignment so nested commands can just use it if needed
     // Or you can leave cli.output as is
-    
+
     execute_command(cli.command, mode, config).await
 }
 

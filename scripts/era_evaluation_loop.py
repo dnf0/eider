@@ -17,7 +17,7 @@ def run_loop():
     baseline_file = "extension/src/vector_writer.rs"
     backup_file = "extension/src/vector_writer.rs.bak"
     candidates = glob.glob("extension/candidates/vector_writer_seed_*.rs")
-    
+
     if not candidates:
         print("No candidates found.")
         return
@@ -39,18 +39,18 @@ def run_loop():
             name = os.path.basename(cand)
             print(f"Evaluating {name}...")
             shutil.copy(cand, baseline_file)
-            
+
             # Run tests
             print("  Running tests...")
             test_res = subprocess.run(
-                ["cargo", "test", "-p", "eider_extension", "test_populate_coordinate_batch"], 
+                ["cargo", "test", "-p", "eider_extension", "test_populate_coordinate_batch"],
                 capture_output=True, text=True, cwd="extension"
             )
             if test_res.returncode != 0:
                 print("  Tests FAILED. Discarding.")
                 results.append((name, "Test Failed"))
                 continue
-            
+
             # Run bench
             print("  Running bench...")
             bench_res = subprocess.run(["cargo", "bench", "-p", "eider_extension"], capture_output=True, text=True, cwd="extension")

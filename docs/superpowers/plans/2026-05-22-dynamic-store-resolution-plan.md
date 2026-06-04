@@ -7,7 +7,7 @@ Remove the fragile, hardcoded cloud provider URLs (e.g., `s3.amazonaws.com`, `bl
 Currently, `resolve_sync_store` intercepts `s3://` and `abfs://` paths and rewrites them into hardcoded HTTP URLs so they can be fetched by the custom `ureq`-based `SyncHttpStore`. While `resolve_async_store` (used by the CLI) properly leverages `opendal`'s robust connection builders, the synchronous DuckDB extension is stuck with the custom HTTP store because the extension must run synchronously.
 
 ## Proposed Solution: Leverage OpenDAL Blocking API
-OpenDAL natively supports a `blocking` API that abstracts away synchronous I/O over async runtimes. 
+OpenDAL natively supports a `blocking` API that abstracts away synchronous I/O over async runtimes.
 
 By enabling the `blocking` feature in OpenDAL, we can completely delete our custom `SyncHttpStore` and use OpenDAL for both synchronous and asynchronous operations. OpenDAL natively reads environment variables (like `AWS_ENDPOINT_URL`, `AWS_REGION`) to configure connections dynamically.
 

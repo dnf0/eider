@@ -116,7 +116,7 @@ fn test_parse_ifd() {
     buffer[0..2].copy_from_slice(b"II"); // LE
     buffer[2..4].copy_from_slice(&42u16.to_le_bytes()); // Magic
     buffer[4..8].copy_from_slice(&8u32.to_le_bytes()); // Offset=8
-    
+
     // IFD starts at 8
     buffer[8..10].copy_from_slice(&1u16.to_le_bytes()); // 1 entry
     // Entry 0 starts at 10
@@ -124,7 +124,7 @@ fn test_parse_ifd() {
     buffer[12..14].copy_from_slice(&4u16.to_le_bytes());   // Type=LONG
     buffer[14..18].copy_from_slice(&1u32.to_le_bytes());   // Count=1
     buffer[18..22].copy_from_slice(&1024u32.to_le_bytes());// Value=1024
-    
+
     let info = parse_cog_metadata(&buffer).unwrap();
     assert_eq!(info.image_width, 1024);
 }
@@ -152,7 +152,7 @@ pub struct CogMetadata {
 pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
     let header = parse_tiff_header(buffer)?;
     let mut meta = CogMetadata::default();
-    
+
     let mut offset = header.first_ifd_offset as usize;
     if offset + 2 > buffer.len() {
         return Err("IFD offset out of bounds".into());
@@ -167,13 +167,13 @@ pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
 
     for _ in 0..num_entries {
         if offset + 12 > buffer.len() { break; }
-        
+
         let tag = if header.is_little_endian {
             u16::from_le_bytes(buffer[offset..offset+2].try_into().unwrap())
         } else {
             u16::from_be_bytes(buffer[offset..offset+2].try_into().unwrap())
         };
-        
+
         // Simplified value extraction for u32 values fitting inline
         let val = if header.is_little_endian {
             u32::from_le_bytes(buffer[offset+8..offset+12].try_into().unwrap())
@@ -194,7 +194,7 @@ pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
         }
         offset += 12;
     }
-    
+
     Ok(meta)
 }
 ```
@@ -237,10 +237,10 @@ mod tests {
             tile_offsets: vec![100, 200, 300, 400],
             tile_byte_counts: vec![50, 50, 50, 50],
         };
-        
+
         let op = opendal::Operator::new(opendal::services::Memory::default()).unwrap().finish();
         let store = VirtualCogStore::new(op, meta);
-        
+
         // Zarrs ReadableStorageTraits implementation test
         use zarrs::storage::ReadableStorageTraits;
         let md = store.get(&zarrs::storage::StoreKey::new(".zmetadata").unwrap()).unwrap().unwrap();
@@ -291,7 +291,7 @@ impl VirtualCogStore {
             }},
             "zarr_consolidated_format": 1
         }}"#, meta.image_length, meta.image_width, meta.tile_length, meta.tile_width);
-        
+
         Self {
             operator,
             meta,
@@ -305,7 +305,7 @@ impl ReadableStorageTraits for VirtualCogStore {
         if key.as_str() == ".zmetadata" {
             return Ok(Some(self.zmetadata_bytes.clone()));
         }
-        
+
         if key.as_str().starts_with("data/") {
             // "data/0.0"
             let parts: Vec<&str> = key.as_str().split('/').collect();
@@ -314,14 +314,14 @@ impl ReadableStorageTraits for VirtualCogStore {
                 if chunks.len() == 2 {
                     let y: usize = chunks[0].parse().unwrap_or(0);
                     let x: usize = chunks[1].parse().unwrap_or(0);
-                    
+
                     let grid_width = (self.meta.image_width as f64 / self.meta.tile_width as f64).ceil() as usize;
                     let flat_idx = y * grid_width + x;
-                    
+
                     if flat_idx < self.meta.tile_offsets.len() {
                         let offset = self.meta.tile_offsets[flat_idx];
                         let length = self.meta.tile_byte_counts[flat_idx];
-                        
+
                         // Blocking call for trait sync requirement
                         if let Ok(bytes) = self.operator.read_with("").range(offset..offset+length).blocking() {
                             return Ok(Some(Bytes::from(bytes.to_bytes())));
@@ -430,14 +430,14 @@ pub fn resolve_sync_store(
     path: &str,
 ) -> std::result::Result<ResolvedStore, Box<dyn std::error::Error>> {
     let is_cog = path.ends_with(".tif") || path.ends_with(".tiff");
-    
+
     if path.starts_with("s3://") {
         let bucket_and_path = path.strip_prefix("s3://").unwrap();
         let bucket = bucket_and_path.split('/').next().unwrap_or(bucket_and_path);
         let root = bucket_and_path.strip_prefix(bucket).unwrap_or("/");
         let builder = opendal::services::S3::default().bucket(bucket).root(root);
         let operator = opendal::Operator::new(builder)?.finish().blocking();
-        
+
         let store: Arc<dyn ReadableStorageTraits> = if is_cog {
             // Minimal header fetch (first 16KB)
             let header_bytes = operator.read_with(root).range(0..16384).blocking()?.to_bytes();
@@ -446,12 +446,12 @@ pub fn resolve_sync_store(
         } else {
             Arc::new(zarrs::storage::store::OpendalStore::new(operator))
         };
-        
+
         Ok(ResolvedStore { store, is_remote: true })
     } else if path.starts_with("http://") || path.starts_with("https://") {
         let builder = opendal::services::Http::default().endpoint(path);
         let operator = opendal::Operator::new(builder)?.finish().blocking();
-        
+
         let store: Arc<dyn ReadableStorageTraits> = if is_cog {
             let header_bytes = operator.read_with("").range(0..16384).blocking()?.to_bytes();
             let meta = crate::cog::parse_cog_metadata(&header_bytes).unwrap_or_default();
@@ -459,14 +459,14 @@ pub fn resolve_sync_store(
         } else {
             Arc::new(zarrs::storage::store::OpendalStore::new(operator))
         };
-        
+
         Ok(ResolvedStore { store, is_remote: true })
     } else {
         // ... (existing filesystem logic)
         let canonical_path =
             std::fs::canonicalize(path).map_err(|e| format!("Invalid path: {}", e))?;
         // ... permission checks ...
-        
+
         let store: Arc<dyn ReadableStorageTraits> = if is_cog {
             let builder = opendal::services::Fs::default().root(canonical_path.to_str().unwrap());
             let operator = opendal::Operator::new(builder)?.finish().blocking();
@@ -476,7 +476,7 @@ pub fn resolve_sync_store(
         } else {
             Arc::new(zarrs::storage::store::FilesystemStore::new(canonical_path)?)
         };
-        
+
         Ok(ResolvedStore { store, is_remote: false })
     }
 }

@@ -236,7 +236,7 @@ export default function Home(): JSX.Element {
               </div>
             </div>
           </div>
-          
+
           <div className="row text--left margin-top--lg">
             <div className="col col--4">
               <h3>Fast & Vectorized</h3>
@@ -388,7 +388,7 @@ The `read_zarr` table function is the core of Eider.
 
 ## Basic Syntax
 ```sql
-SELECT time, lat, lon, value 
+SELECT time, lat, lon, value
 FROM read_zarr('s3://bucket/data.zarr');
 ```
 
@@ -423,7 +423,7 @@ You can write materialized views back out to cloud storage as Zarr arrays using 
 
 ```sql
 COPY (
-    SELECT time, lat, lon, (temp_k - 273.15) AS temp_c 
+    SELECT time, lat, lon, (temp_k - 273.15) AS temp_c
     FROM read_zarr('s3://in/data.zarr')
 ) TO 's3://out/data.zarr' (FORMAT ZARR);
 ```
@@ -479,7 +479,7 @@ sequenceDiagram
     participant User
     participant Eider
     participant HTTP
-    
+
     User->>Eider: SELECT * FROM read_zarr('test.tif')
     Eider->>HTTP: GET test.tif (Range: bytes=0-16384)
     HTTP-->>Eider: Returns TIFF Header & IFD
@@ -557,8 +557,8 @@ export function HeadToHeadPlot() {
           marker: { color: ['#636efa', '#EF553B', '#00cc96', '#ab63fa'] }
         }
       ]}
-      layout={{ 
-        title: 'Query Latency: California Bounding Box (ms)', 
+      layout={{
+        title: 'Query Latency: California Bounding Box (ms)',
         yaxis: { title: 'Milliseconds (Lower is better)' },
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
@@ -593,8 +593,8 @@ export function ScalingPlot() {
           line: { width: 4 }
         }
       ]}
-      layout={{ 
-        title: 'Throughput Scaling (Thread = 1)', 
+      layout={{
+        title: 'Throughput Scaling (Thread = 1)',
         yaxis: { title: 'Query Time (ms)' },
         paper_bgcolor: 'rgba(0,0,0,0)',
         plot_bgcolor: 'rgba(0,0,0,0)',
@@ -627,7 +627,7 @@ Eider matches or beats the fastest available Python Zarr library (even the Rust-
 
 ## Code Generation Latency
 
-To achieve these speeds, Eider lazily evaluates coordinates (Lat/Lon) via affine transform dynamically, rather than fetching them over the network. 
+To achieve these speeds, Eider lazily evaluates coordinates (Lat/Lon) via affine transform dynamically, rather than fetching them over the network.
 
 <ScalingPlot />
 

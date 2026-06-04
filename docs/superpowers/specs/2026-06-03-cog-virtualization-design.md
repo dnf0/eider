@@ -1,7 +1,7 @@
 # Native COG Virtualization Design
 
 ## Overview
-This feature introduces a native Cloud Optimized GeoTIFF (COG) parser within `eider`'s core Rust library (`geozarr_core`). By generating virtual Zarr metadata in-memory and translating Zarr chunk requests into precise COG tile byte-range reads over HTTP, `eider` can seamlessly query `.tif` datasets without any external Kerchunk/VirtualiZarr Python steps. 
+This feature introduces a native Cloud Optimized GeoTIFF (COG) parser within `eider`'s core Rust library (`geozarr_core`). By generating virtual Zarr metadata in-memory and translating Zarr chunk requests into precise COG tile byte-range reads over HTTP, `eider` can seamlessly query `.tif` datasets without any external Kerchunk/VirtualiZarr Python steps.
 
 ## Architecture & Components
 
