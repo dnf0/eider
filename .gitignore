@@ -14,3 +14,4 @@ extension/candidates/
 test_genai_async.py
 get_logs.sh
 fix_scores.py
+.duckdb_ext_cache/
