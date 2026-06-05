@@ -2,7 +2,7 @@
 
 A high-performance, cloud-native [DuckDB](https://duckdb.org/) extension for reading and writing N-dimensional [Zarr](https://zarr.readthedocs.io/) and GeoZarr arrays directly as flat relational tables.
 
-![Eider End-to-End Demo](docs/static/img/demo.gif)
+![Eider End-to-End Demo](docs/static/img/demo-v2.gif)
 
 [![Semantic Release](https://github.com/dnf0/eider/actions/workflows/release.yaml/badge.svg)](https://github.com/dnf0/eider/actions/workflows/release.yaml)
 

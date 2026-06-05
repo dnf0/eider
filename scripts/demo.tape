@@ -1,4 +1,4 @@
-Output docs/static/img/demo.gif
+Output docs/static/img/demo-v2.gif
 
 Set FontSize 16
 Set FontFamily "Geist Mono, Berkeley Mono, Fira Code, JetBrains Mono, Menlo, Apple Color Emoji"
