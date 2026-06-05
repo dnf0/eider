@@ -89,8 +89,12 @@ jobs:
       - name: Build extension and test
         shell: bash
         run: |
-          cargo duckdb-ext build
-          cargo test --no-default-features
+          # Build a LOADABLE extension: name it eider.duckdb_extension (the init
+          # symbol is derived from the filename), stamp the runtime DuckDB version
+          # (libduckdb bundled by the =1.10502.0 crate reports v1.5.2), and omit
+          # `bundled` so the host DuckDB's C API is used instead of a static copy.
+          cargo duckdb-ext build -o target/debug/eider.duckdb_extension -d v1.5.2 -- --no-default-features --features loadable-extension
+          cargo test
 
   audit-and-coverage:
     name: Security Audit & Coverage

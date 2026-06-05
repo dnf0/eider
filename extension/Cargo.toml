@@ -9,13 +9,20 @@ name = "eider"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["bundled"]
+# Statically link libduckdb — required for normal (non-loadable) builds, the
+# extension's own tests, and benches.
+bundled = ["duckdb/bundled", "duckdb/buildtime_bindgen"]
+# Build as a loadable DuckDB extension. Build with
+# `--no-default-features --features loadable-extension` so `bundled` is omitted:
+# a loadable C-API extension must use the host DuckDB's API table rather than a
+# second, statically-linked (and uninitialised) copy.
 loadable-extension = ["duckdb/loadable-extension", "duckdb/vtab-loadable"]
 
 [dependencies]
 geozarr_core = { path = "../geozarr_core" }
 bytemuck = "1.19.0"
-duckdb = { version = "=1.10502.0", features = ["bundled", "vtab", "buildtime_bindgen"] }
+duckdb = { version = "=1.10502.0", features = ["vtab"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0"
 zarrs = { version = "0.16.4", default-features = false, features = ["blosc", "gzip", "crc32c", "zstd", "sharding", "transpose", "ndarray"] }

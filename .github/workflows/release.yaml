@@ -48,11 +48,16 @@ jobs:
       - name: Build Extension
         shell: bash
         run: |
+          # Build a LOADABLE extension: omit `bundled` (use the host DuckDB C API)
+          # and stamp the runtime DuckDB version (the =1.10502.0 crate bundles
+          # libduckdb v1.5.2). The init symbol is derived from the loaded filename,
+          # so the CLI expects `eider.duckdb_extension`; install renames the
+          # per-platform artifact to that locally.
           if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            cargo build --package eider_extension --release
-            cargo duckdb-ext package --library-path target/release/eider.dll --extension-path target/release/${{ matrix.artifact_name }} --extension-version v0.1.0 --duckdb-platform windows_amd64 --duckdb-version v1.10502.0
+            cargo build --package eider_extension --release --no-default-features --features loadable-extension
+            cargo duckdb-ext package --library-path target/release/eider.dll --extension-path target/release/${{ matrix.artifact_name }} --extension-version v0.1.0 --duckdb-platform windows_amd64 --duckdb-version v1.5.2
           else
-            cargo duckdb-ext build -- --release
+            cargo duckdb-ext build -o target/release/eider.duckdb_extension -d v1.5.2 -- --release --no-default-features --features loadable-extension
           fi
 
       - name: Rename Artifact
