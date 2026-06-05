@@ -17,7 +17,13 @@ bundled = ["duckdb/bundled", "duckdb/buildtime_bindgen"]
 # `--no-default-features --features loadable-extension` so `bundled` is omitted:
 # a loadable C-API extension must use the host DuckDB's API table rather than a
 # second, statically-linked (and uninitialised) copy.
-loadable-extension = ["duckdb/loadable-extension", "duckdb/vtab-loadable"]
+# `buildtime_bindgen` regenerates DuckDB bindings for the target platform; the
+# pre-generated loadable bindings don't match Windows' type layout (E0308).
+loadable-extension = [
+    "duckdb/loadable-extension",
+    "duckdb/vtab-loadable",
+    "duckdb/buildtime_bindgen",
+]
 
 [dependencies]
 geozarr_core = { path = "../geozarr_core" }
