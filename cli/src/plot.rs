@@ -760,7 +760,8 @@ mod tests {
 
     #[test]
     fn detects_non_coordinate_value_column() {
-        let c = mem("CREATE TABLE t (time BIGINT, lat DOUBLE, lon DOUBLE, air_temperature DOUBLE);");
+        let c =
+            mem("CREATE TABLE t (time BIGINT, lat DOUBLE, lon DOUBLE, air_temperature DOUBLE);");
         assert_eq!(detect_value_column(&c, "t").unwrap(), "air_temperature");
     }
 

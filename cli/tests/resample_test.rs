@@ -25,7 +25,10 @@ fn resample_year_avg_is_correct() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!((v2020 - 3.0).abs() < 1e-9, "2020 avg should be 3.0, got {v2020}");
+    assert!(
+        (v2020 - 3.0).abs() < 1e-9,
+        "2020 avg should be 3.0, got {v2020}"
+    );
     let v2021: f64 = conn
         .query_row(
             "SELECT value FROM resampled_data WHERE year(time) = 2021",
@@ -33,7 +36,10 @@ fn resample_year_avg_is_correct() {
             |r| r.get(0),
         )
         .unwrap();
-    assert!((v2021 - 10.0).abs() < 1e-9, "2021 avg should be 10.0, got {v2021}");
+    assert!(
+        (v2021 - 10.0).abs() < 1e-9,
+        "2021 avg should be 10.0, got {v2021}"
+    );
 }
 
 #[test]

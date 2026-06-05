@@ -229,15 +229,17 @@ mod tests {
             "CREATE TABLE extracted_data (time BIGINT, lat DOUBLE, lon DOUBLE, air_temperature DOUBLE);",
         );
         let (t, la, lo, v, numeric) = detect_columns(&conn, "extracted_data").unwrap();
-        assert_eq!((t.as_str(), la.as_str(), lo.as_str(), v.as_str()), ("time", "lat", "lon", "air_temperature"));
+        assert_eq!(
+            (t.as_str(), la.as_str(), lo.as_str(), v.as_str()),
+            ("time", "lat", "lon", "air_temperature")
+        );
         assert!(numeric);
     }
 
     #[test]
     fn detect_columns_marks_timestamp_non_numeric() {
-        let conn = mem_with_table(
-            "CREATE TABLE t (time TIMESTAMP, lat DOUBLE, lon DOUBLE, val DOUBLE);",
-        );
+        let conn =
+            mem_with_table("CREATE TABLE t (time TIMESTAMP, lat DOUBLE, lon DOUBLE, val DOUBLE);");
         let (_, _, _, _, numeric) = detect_columns(&conn, "t").unwrap();
         assert!(!numeric);
     }
@@ -250,9 +252,8 @@ mod tests {
 
     #[test]
     fn auto_calculate_chunks_defaults() {
-        let conn = mem_with_table(
-            "CREATE TABLE t (time BIGINT, lat DOUBLE, lon DOUBLE, val DOUBLE);",
-        );
+        let conn =
+            mem_with_table("CREATE TABLE t (time BIGINT, lat DOUBLE, lon DOUBLE, val DOUBLE);");
         let map = auto_calculate_chunks(&conn, "t").unwrap();
         assert_eq!(map.get("time").unwrap(), &serde_json::json!(10));
         assert_eq!(map.get("lat").unwrap(), &serde_json::json!(100));

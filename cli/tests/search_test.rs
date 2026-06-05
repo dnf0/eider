@@ -14,7 +14,9 @@ async fn search_json_lists_zarr_uris() {
         .assert()
         .success()
         .stdout(predicate::str::contains(r#""status":"success""#))
-        .stdout(predicate::str::contains("https://example.com/cmip6/tas.zarr"));
+        .stdout(predicate::str::contains(
+            "https://example.com/cmip6/tas.zarr",
+        ));
 }
 
 #[tokio::test]

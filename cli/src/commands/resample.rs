@@ -195,7 +195,9 @@ mod tests {
 
     #[test]
     fn validate_agg_accepts_known() {
-        for a in ["sum", "avg", "min", "max", "count", "mean", "median", "mode", "stddev", "variance"] {
+        for a in [
+            "sum", "avg", "min", "max", "count", "mean", "median", "mode", "stddev", "variance",
+        ] {
             assert!(validate_agg(a).is_ok(), "{a} should be valid");
         }
     }

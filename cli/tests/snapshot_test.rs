@@ -21,13 +21,20 @@ fn test_cli_help_snapshot() {
 }
 
 fn clean(s: &str) -> String {
-    s.lines().map(|l| l.trim_end()).collect::<Vec<_>>().join("\n").replace("eider.exe", "eider")
+    s.lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
+        .replace("eider.exe", "eider")
 }
 
 #[test]
 fn resample_help_snapshot() {
     let dir = tempfile::tempdir().unwrap();
-    let assert = common::eider(&dir).args(["resample", "--help"]).assert().success();
+    let assert = common::eider(&dir)
+        .args(["resample", "--help"])
+        .assert()
+        .success();
     let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     insta::assert_snapshot!(clean(&out));
 }
@@ -35,7 +42,10 @@ fn resample_help_snapshot() {
 #[test]
 fn extract_help_snapshot() {
     let dir = tempfile::tempdir().unwrap();
-    let assert = common::eider(&dir).args(["extract", "--help"]).assert().success();
+    let assert = common::eider(&dir)
+        .args(["extract", "--help"])
+        .assert()
+        .success();
     let out = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     insta::assert_snapshot!(clean(&out));
 }

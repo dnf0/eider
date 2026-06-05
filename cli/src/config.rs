@@ -78,11 +78,7 @@ mod tests {
     #[serial]
     fn test_local_toml_sets_output_format() {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join(".eider.toml"),
-            "output_format = \"json\"\n",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join(".eider.toml"), "output_format = \"json\"\n").unwrap();
         let prev = std::env::current_dir().unwrap();
         std::env::set_current_dir(dir.path()).unwrap();
 
