@@ -45,10 +45,6 @@ Sleep 2s
 Type "cmip6"
 Sleep 1s
 Enter
-Sleep 2s
-Type "tas"
-Sleep 1s
-Enter
 Sleep 4s
 
 # Step 2: Zonal Extraction
