@@ -12,6 +12,12 @@ jobs:
   ci-checks:
     name: CI Checks
     runs-on: ${{ matrix.os }}
+    # Disable debug info: each integration-test binary statically links bundled
+    # DuckDB, and the resulting .pdb files exhaust the Windows runner's disk
+    # (LNK1201). Tests don't need debug symbols.
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     strategy:
       matrix:
         include:
