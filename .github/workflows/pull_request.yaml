@@ -105,17 +105,16 @@ jobs:
           # symbol is derived from the filename), stamp the runtime DuckDB version
           # (libduckdb bundled by the =1.10502.0 crate reports v1.5.2), and omit
           # `bundled` so the host DuckDB's C API is used instead of a static copy.
-          #
-          # Windows: the loadable extension can't currently be built on MSVC — the
-          # loadable (non-bundled) build uses pre-generated bindings that mismatch
-          # Windows' type layout (E0308), buildtime_bindgen needs headers that only
-          # `bundled` provides, and `bundled` itself reintroduces the static-link
-          # "API not initialized" failure. So skip the extension build on Windows;
-          # the extension-backed tests self-skip when the artifact is absent.
-          if [ "$RUNNER_OS" != "Windows" ]; then
-            cargo duckdb-ext build -o target/debug/eider.duckdb_extension -d v1.5.2 -- --no-default-features --features loadable-extension
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # On Windows the pre-generated loadable bindings mismatch the MSVC type
+            # layout (E0308), so regenerate them with buildtime_bindgen, pointing
+            # clang at the vendored duckdb headers. The extension lib target `eider`
+            # collides with the cli bin `eider`, so `cargo duckdb-ext build` can't
+            # locate the cdylib — build the package alone and package the dll.
+            BINDGEN_EXTRA_CLANG_ARGS="-I$PWD/extension/vendor" cargo build --package eider_extension --no-default-features --features loadable-bindgen
+            cargo duckdb-ext package --library-path target/debug/eider.dll --extension-path target/debug/eider.duckdb_extension --extension-version v0.1.0 --duckdb-platform windows_amd64 --duckdb-version v1.5.2
           else
-            echo "Skipping loadable extension build on Windows (unsupported); extension-backed tests self-skip."
+            cargo duckdb-ext build -o target/debug/eider.duckdb_extension -d v1.5.2 -- --no-default-features --features loadable-extension
           fi
           cargo test
 

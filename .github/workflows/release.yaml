@@ -54,11 +54,12 @@ jobs:
           # so the CLI expects `eider.duckdb_extension`; install renames the
           # per-platform artifact to that locally.
           if [ "${{ matrix.os }}" == "windows-latest" ]; then
-            # NOTE: the loadable extension can't currently be built on Windows MSVC
-            # (see pull_request.yaml). This builds the bundled (non-loadable) lib as
-            # before; producing a loadable Windows artifact is a tracked follow-up.
-            cargo build --package eider_extension --release
-            cargo duckdb-ext package --library-path target/release/eider.dll --extension-path target/release/${{ matrix.artifact_name }} --extension-version v0.1.0 --duckdb-platform windows_amd64 --duckdb-version v1.10502.0
+            # Regenerate loadable bindings for MSVC (the pre-generated ones mismatch
+            # the Windows type layout -> E0308) via buildtime_bindgen + the vendored
+            # duckdb headers; build the package alone (its lib target `eider`
+            # collides with the cli bin) and package the dll, stamped v1.5.2.
+            BINDGEN_EXTRA_CLANG_ARGS="-I$PWD/extension/vendor" cargo build --package eider_extension --release --no-default-features --features loadable-bindgen
+            cargo duckdb-ext package --library-path target/release/eider.dll --extension-path target/release/${{ matrix.artifact_name }} --extension-version v0.1.0 --duckdb-platform windows_amd64 --duckdb-version v1.5.2
           else
             cargo duckdb-ext build -o target/release/eider.duckdb_extension -d v1.5.2 -- --release --no-default-features --features loadable-extension
           fi
