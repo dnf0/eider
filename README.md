@@ -38,22 +38,22 @@ This project bridges the gap with two tools:
 Download the `.duckdb_extension` binary for your platform from the [Releases page](https://github.com/dnf0/eider/releases), or build it from source.
 
 ```sql
--- Allow unsigned extensions
-SET allow_unsigned_extensions = true;
+-- Launch DuckDB allowing unsigned extensions (the flag must be set at startup):
+--   duckdb -unsigned
 
--- Load the extension
-LOAD '/path/to/eider_extension.duckdb_extension';
+-- Load the extension (LOAD requires an absolute path)
+LOAD '/path/to/eider.duckdb_extension';
 
--- Query a remote Zarr array, aggregating over a specific spatial bounding box
+-- Query a Zarr array directly, aggregating over a spatial bounding box
 SELECT
-    time,
-    AVG(value) as mean_temp
-FROM read_zarr(
+    lat,
+    AVG(value) AS mean_temp
+FROM read_geo(
     's3://climate-data/temperature.zarr',
     lat_min := 45.0,
     lat_max := 55.0
 )
-GROUP BY time;
+GROUP BY lat;
 ```
 
 ## Eider CLI (Agentic Data Engine)
