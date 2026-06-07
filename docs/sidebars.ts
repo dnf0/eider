@@ -20,7 +20,12 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'SQL Reference',
-      items: ['usage/sql_reference'],
+      items: [
+        'usage/sql_reference',
+        'usage/sql_read_geo',
+        'usage/sql_read_zarr_metadata',
+        'usage/sql_plan_read_geo',
+      ],
     },
     {
       type: 'category',
