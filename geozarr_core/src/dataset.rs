@@ -58,30 +58,34 @@ impl ZarrDataset {
         let is_remote = resolved_store.is_remote;
         let store_arc = resolved_store.store;
 
-        // Root array (plain Zarr/COG) vs group (STAC): probe for a root `.zarray`.
-        let has_root_array = store_arc
-            .get(&zarrs::storage::StoreKey::new(".zarray").unwrap())
-            .map(|o| o.is_some())
-            .unwrap_or(false);
-        let array_path = if has_root_array {
-            "/".to_string()
-        } else {
-            let zmeta = store_arc
-                .get(&zarrs::storage::StoreKey::new(".zmetadata").unwrap())
-                .ok()
-                .flatten()
-                .ok_or_else(|| -> Box<dyn std::error::Error> {
-                    "source is neither a Zarr array nor a STAC group".into()
-                })?;
-            let zmeta = String::from_utf8(zmeta.to_vec())
-                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-            select_array_path(&zmeta, asset)
-                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+        // A plain Zarr array (V2 or V3) or COG has a root array; a STAC Item resolves
+        // to a group of asset arrays with no root array. Try the root first (handles
+        // every non-STAC source exactly as before), then fall back to asset selection.
+        let array = match Array::open(Arc::clone(&store_arc), "/") {
+            Ok(a) => a,
+            Err(root_err) => {
+                let zmeta = store_arc
+                    .get(&zarrs::storage::StoreKey::new(".zmetadata").unwrap())
+                    .ok()
+                    .flatten();
+                match zmeta {
+                    Some(bytes) => {
+                        let zmeta = String::from_utf8(bytes.to_vec())
+                            .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+                        let array_path = select_array_path(&zmeta, asset)
+                            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                        Array::open(Arc::clone(&store_arc), &array_path).map_err(
+                            |e| -> Box<dyn std::error::Error> {
+                                format!("zarrs error (array): {}", e).into()
+                            },
+                        )?
+                    }
+                    None => {
+                        return Err(format!("zarrs error (array): {}", root_err).into());
+                    }
+                }
+            }
         };
-
-        let array = Array::open(Arc::clone(&store_arc), &array_path).map_err(
-            |e| -> Box<dyn std::error::Error> { format!("zarrs error (array): {}", e).into() },
-        )?;
 
         let shape = array.shape().to_vec();
         let rank = shape.len();
