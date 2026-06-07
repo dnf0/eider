@@ -1,20 +1,55 @@
 # COG Virtualization
 
-Eider natively reads Cloud Optimized GeoTIFFs (COGs) by "tricking" the Zarr decoding pipeline.
+:::caution Experimental
+COG virtualization is implemented at the `geozarr_core` library level and is
+reachable by opening a `.tif`/`.tiff` path directly (and via a conditional
+end-to-end test through `read_geo('*.tif')`). It is **not yet a first-class,
+stable `read_geo` source**, and its internals may change.
+:::
+
+Eider can read a Cloud Optimized GeoTIFF (COG) without downloading or converting
+it, by presenting the COG to the `zarrs` pipeline as if it were a Zarr array.
 
 ```mermaid
 sequenceDiagram
-    participant User
+    participant Caller
     participant Eider
-    participant HTTP
+    participant Store as OpenDAL
 
-    User->>Eider: SELECT * FROM read_zarr('test.tif')
-    Eider->>HTTP: GET test.tif (Range: bytes=0-16384)
-    HTTP-->>Eider: Returns TIFF Header & IFD
-    Eider->>Eider: Parse IFD pointers (offsets, lengths, dims)
-    Eider->>Eider: Synthesize .zarray JSON in-memory
-    Eider-->>User: Streams lazily decoded blocks via Zarrs!
+    Caller->>Eider: open a .tif path
+    Eider->>Store: GET header byte-range
+    Store-->>Eider: TIFF header + IFD
+    Eider->>Eider: Parse IFD tags (dims, tile offsets, byte counts)
+    Eider->>Eider: Synthesize .zmetadata / .zarray in memory
+    Note over Eider: Zarr chunk key "y.x" → tile byte-range
+    Eider->>Store: GET tile byte-range (per chunk)
+    Store-->>Eider: tile bytes → zarrs decodes lazily
 ```
 
-## Zero-Copy Translation
-Instead of downloading the file or rewriting it to Zarr, Eider generates virtual Zarr chunk boundaries that perfectly map to the COG's internal byte-ranges. Benchmarks show synthesizing this `.zarray` takes **~2.4ms** for a 10,000-tile COG.
+## How it works
+
+1. **Parse the TIFF.** `geozarr_core/src/cog.rs` reads the byte-order mark and
+   IFD offset, then extracts the tags it needs: image width/length (256/257),
+   tile width/length (322/323), and the per-tile offsets and byte counts
+   (324/325).
+2. **Synthesize a virtual Zarr array.** `VirtualCogStore`
+   (`geozarr_core/src/virtual_store.rs`) generates `.zmetadata` and `.zarray`
+   JSON in memory describing an array whose chunk shape equals the COG's tile
+   shape.
+3. **Map chunks to byte-ranges.** A Zarr chunk key of the form `"y.x"` is
+   translated to the corresponding tile's `(offset, length)` and served by a
+   single OpenDAL range GET; `zarrs` then decodes the tile lazily.
+
+`resolve_sync_store` (`geozarr_core/src/store.rs`) detects `.tif`/`.tiff` paths
+and instantiates the `VirtualCogStore` automatically, so the rest of the
+pipeline is identical to reading a real Zarr array.
+
+## STAC (planned, not yet wired to SQL)
+
+A `VirtualStacStore` exists in `geozarr_core` that parses a STAC Item, extracts
+its COG assets, and composes them as a set of virtual COG stores
+(`geozarr_core/src/store.rs`). However, the `read_geo` SQL function currently
+**returns an explicit error** for STAC paths
+(`extension/src/table_function.rs`) — STAC consumption from SQL is planned but
+not yet wired up. Until then, STAC sources are not queryable through the
+extension.
