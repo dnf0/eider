@@ -15,7 +15,11 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Guides',
-      items: ['usage/exporting'],
+      items: [
+        'usage/guide_workflow',
+        'usage/guide_cloud',
+        'usage/exporting',
+      ],
     },
     {
       type: 'category',
