@@ -167,7 +167,7 @@ pub fn resolve_sync_store(
                 async_operator,
                 "".to_string(),
                 meta,
-            ))
+            )?)
         } else {
             Arc::new(AsyncToSyncOpendalStore::new(async_operator))
         };
@@ -281,14 +281,16 @@ pub fn resolve_sync_store(
                                         let mut children_map = std::collections::HashMap::new();
                                         while let Some(res) = set.join_next().await {
                                             if let Ok((name, store)) = res {
-                                                children_map.insert(name, store);
+                                                // A multi-band / unsupported child COG fails the
+                                                // whole STAC open; STAC is not first-class yet.
+                                                children_map.insert(name, store?);
                                             }
                                         }
-                                        children_map
+                                        Ok::<_, String>(children_map)
                                     })
                                 })
                                 .join()
-                                .unwrap();
+                                .unwrap()?;
 
                                 let store = std::sync::Arc::new(
                                     crate::virtual_stac_store::VirtualStacStore::new(children),
@@ -377,7 +379,7 @@ pub fn resolve_sync_store(
                                         let store = std::sync::Arc::new(
                                             crate::virtual_store::VirtualCogStore::new(
                                                 operator, root_str, meta,
-                                            ),
+                                            )?,
                                         );
                                         return Ok(ResolvedStore {
                                             store,
@@ -411,7 +413,7 @@ pub fn resolve_sync_store(
                 async_operator,
                 "".to_string(),
                 meta,
-            ))
+            )?)
         } else {
             Arc::new(AsyncToSyncOpendalStore::new(async_operator))
         };
@@ -472,7 +474,7 @@ pub fn resolve_sync_store(
                 async_operator,
                 filename,
                 meta,
-            ))
+            )?)
         } else {
             Arc::new(zarrs::storage::store::FilesystemStore::new(canonical_path)?)
         };

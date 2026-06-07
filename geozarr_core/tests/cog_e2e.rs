@@ -56,3 +56,28 @@ fn cog_deflate_matches_uncompressed_metadata() {
     assert_eq!(a.shape, b.shape);
     assert_eq!(a.dim_names, b.dim_names);
 }
+
+#[test]
+fn cog_deflate_matches_uncompressed_values() {
+    // Read the full array through the public `zarrs::Array` exposed on
+    // `ZarrDataset`, decoding both the deflate-compressed and uncompressed
+    // COGs end-to-end, and assert they decode to identical i16 values.
+    let a = ZarrDataset::open(&fixture("cog_int16_uncompressed.tif")).unwrap();
+    let b = ZarrDataset::open(&fixture("cog_int16_deflate.tif")).unwrap();
+
+    let subset = zarrs::array_subset::ArraySubset::new_with_shape(a.shape.clone());
+    let a_vals: Vec<i16> = a
+        .array
+        .retrieve_array_subset_elements::<i16>(&subset)
+        .unwrap();
+    let b_vals: Vec<i16> = b
+        .array
+        .retrieve_array_subset_elements::<i16>(&subset)
+        .unwrap();
+
+    assert!(!a_vals.is_empty(), "array must have values");
+    assert_eq!(
+        a_vals, b_vals,
+        "deflate and uncompressed COGs must decode element-for-element"
+    );
+}

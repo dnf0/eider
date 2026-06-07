@@ -14,9 +14,17 @@ pub struct VirtualCogStore {
 }
 
 impl VirtualCogStore {
-    pub fn new(operator: opendal::Operator, filename: String, meta: CogMetadata) -> Self {
+    pub fn new(
+        operator: opendal::Operator,
+        filename: String,
+        meta: CogMetadata,
+    ) -> Result<Self, String> {
         // Synthesize honest Zarr-V2 metadata from the parsed COG.
-        let dtype = meta.zarr_dtype().unwrap_or_else(|_| "<f4".to_string());
+        // `zarr_dtype()` is the guard that rejects multi-band COGs and
+        // unsupported bit-depths/sample-formats; propagate its error so an
+        // unsupported COG fails loudly at open time rather than silently
+        // decoding as <f4 garbage.
+        let dtype = meta.zarr_dtype()?;
         // zarrs' Zarr-V2 reader rejects a null fill value for integer data types,
         // so when the COG carries no GDAL_NODATA tag we fall back to a concrete 0
         // sentinel (valid for every supported dtype) rather than `null`.
@@ -51,14 +59,14 @@ impl VirtualCogStore {
             zarray, zattrs
         );
 
-        Self {
+        Ok(Self {
             operator,
             filename,
             meta,
             zarray_bytes: Bytes::from(zarray),
             zattrs_bytes: Bytes::from(zattrs),
             zmetadata_bytes: Bytes::from(zmetadata),
-        }
+        })
     }
 }
 
@@ -207,7 +215,7 @@ mod tests {
         let op = opendal::Operator::new(opendal::services::Memory::default())
             .unwrap()
             .finish();
-        let store = VirtualCogStore::new(op, "".to_string(), meta);
+        let store = VirtualCogStore::new(op, "".to_string(), meta).unwrap();
 
         let zarray = String::from_utf8(
             store
@@ -231,6 +239,32 @@ mod tests {
         assert!(zattrs.contains("\"lat\"") && zattrs.contains("\"lon\""));
         assert!(zattrs.contains("EPSG:4326"));
         assert!(zattrs.contains("spatial_transform"));
+    }
+
+    #[tokio::test]
+    async fn test_multiband_cog_rejected_at_open() {
+        // A multi-band COG (samples_per_pixel != 1) is otherwise valid but
+        // unsupported; opening it must fail loudly rather than silently
+        // misreading the data as single-band <f4.
+        let meta = crate::cog::CogMetadata {
+            image_width: 4,
+            image_length: 2,
+            tile_width: 4,
+            tile_length: 2,
+            tile_offsets: vec![0],
+            tile_byte_counts: vec![16],
+            is_little_endian: true,
+            bits_per_sample: 16,
+            sample_format: 2,
+            samples_per_pixel: 3,
+            compression: 1,
+            predictor: 1,
+            ..Default::default()
+        };
+        let op = opendal::Operator::new(opendal::services::Memory::default())
+            .unwrap()
+            .finish();
+        assert!(VirtualCogStore::new(op, "".to_string(), meta).is_err());
     }
 
     #[tokio::test]
@@ -263,7 +297,7 @@ mod tests {
             predictor: 1,
             ..Default::default()
         };
-        let store = VirtualCogStore::new(op, "tile.bin".to_string(), meta);
+        let store = VirtualCogStore::new(op, "tile.bin".to_string(), meta).unwrap();
         let out = store
             .get(&zarrs::storage::StoreKey::new("0.0").unwrap())
             .unwrap()
