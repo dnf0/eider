@@ -310,12 +310,21 @@ pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
             259 => meta.compression = extract_single_val() as u16,
             317 => meta.predictor = extract_single_val() as u16,
             42113 => {
-                let start = val_or_offset as usize;
-                let end = (start + count as usize).min(buffer.len());
-                if start <= end {
-                    if let Ok(s) = std::str::from_utf8(&buffer[start..end]) {
-                        meta.nodata = CogMetadata::parse_nodata(s);
+                let n = count as usize;
+                let raw: &[u8] = if n <= 4 {
+                    // ASCII value <= 4 bytes is stored inline in the value/offset field.
+                    &buffer[offset + 8..offset + 8 + n]
+                } else {
+                    let start = val_or_offset as usize;
+                    let end = (start + n).min(buffer.len());
+                    if start > end {
+                        &[]
+                    } else {
+                        &buffer[start..end]
                     }
+                };
+                if let Ok(s) = std::str::from_utf8(raw) {
+                    meta.nodata = CogMetadata::parse_nodata(s);
                 }
             }
             33550 => meta.pixel_scale = extract_f64_array(count as usize, val_or_offset),
@@ -541,5 +550,45 @@ mod tests {
         assert_eq!(t.translation, vec![90.0, -180.0]); // [tiepointY, tiepointX]
         assert_eq!(m.crs(), Some("EPSG:4326".to_string()));
         assert_eq!(m.dim_names(), vec!["lat".to_string(), "lon".to_string()]);
+    }
+
+    #[test]
+    fn test_nodata_inline() {
+        // GDAL_NODATA (42113), ASCII (type 2), count=2 value "0\0" stored INLINE
+        // (<= 4 bytes lives in the entry's value/offset field).
+        let mut b = vec![0u8; 32];
+        b[0..2].copy_from_slice(b"II");
+        b[2..4].copy_from_slice(&42u16.to_le_bytes());
+        b[4..8].copy_from_slice(&8u32.to_le_bytes());
+        b[8..10].copy_from_slice(&1u16.to_le_bytes()); // 1 entry
+                                                       // Entry at offset 10
+        b[10..12].copy_from_slice(&42113u16.to_le_bytes()); // GDAL_NODATA
+        b[12..14].copy_from_slice(&2u16.to_le_bytes()); // Type=ASCII
+        b[14..18].copy_from_slice(&2u32.to_le_bytes()); // Count=2 ("0\0")
+                                                        // Inline value "0\0" in first two bytes of value field (offset 18..20)
+        b[18] = 0x30; // '0'
+        b[19] = 0x00; // NUL
+        let m = parse_cog_metadata(&b).unwrap();
+        assert_eq!(m.nodata, Some(0.0));
+    }
+
+    #[test]
+    fn test_nodata_offset() {
+        // GDAL_NODATA (42113), ASCII (type 2), count=6 value "-9999\0" stored at an OFFSET
+        // (> 4 bytes lives at a file offset pointed to by the value field).
+        let mut b = vec![0u8; 64];
+        b[0..2].copy_from_slice(b"II");
+        b[2..4].copy_from_slice(&42u16.to_le_bytes());
+        b[4..8].copy_from_slice(&8u32.to_le_bytes());
+        b[8..10].copy_from_slice(&1u16.to_le_bytes()); // 1 entry
+                                                       // Entry at offset 10; IFD ends at 22
+        let data_off = 32usize;
+        b[10..12].copy_from_slice(&42113u16.to_le_bytes()); // GDAL_NODATA
+        b[12..14].copy_from_slice(&2u16.to_le_bytes()); // Type=ASCII
+        b[14..18].copy_from_slice(&6u32.to_le_bytes()); // Count=6 ("-9999\0")
+        b[18..22].copy_from_slice(&(data_off as u32).to_le_bytes()); // offset to value
+        b[data_off..data_off + 6].copy_from_slice(b"-9999\0");
+        let m = parse_cog_metadata(&b).unwrap();
+        assert_eq!(m.nodata, Some(-9999.0));
     }
 }
