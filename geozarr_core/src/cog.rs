@@ -37,7 +37,7 @@ pub fn parse_tiff_header(buffer: &[u8]) -> Result<TiffHeader, String> {
     })
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct CogMetadata {
     pub image_width: u32,
     pub image_length: u32,
@@ -45,11 +45,20 @@ pub struct CogMetadata {
     pub tile_length: u32,
     pub tile_offsets: Vec<u64>,
     pub tile_byte_counts: Vec<u64>,
+    pub is_little_endian: bool,
+    pub bits_per_sample: u16,   // 258; default filled in Step 3
+    pub sample_format: u16,     // 339; 1=uint (default), 2=int, 3=float
+    pub samples_per_pixel: u16, // 277; default 1
+    pub compression: u16,       // 259; 1=none (default)
+    pub predictor: u16,         // 317; 1=none (default)
 }
 
 pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
     let header = parse_tiff_header(buffer)?;
-    let mut meta = CogMetadata::default();
+    let mut meta = CogMetadata {
+        is_little_endian: header.is_little_endian,
+        ..Default::default()
+    };
 
     let mut offset = header.first_ifd_offset as usize;
     if offset + 2 > buffer.len() {
@@ -139,6 +148,11 @@ pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
             257 => meta.image_length = extract_single_val(),
             322 => meta.tile_width = extract_single_val(),
             323 => meta.tile_length = extract_single_val(),
+            258 => meta.bits_per_sample = extract_single_val() as u16,
+            277 => meta.samples_per_pixel = extract_single_val() as u16,
+            339 => meta.sample_format = extract_single_val() as u16,
+            259 => meta.compression = extract_single_val() as u16,
+            317 => meta.predictor = extract_single_val() as u16,
             324 => {
                 if count == 1 {
                     meta.tile_offsets.push(extract_single_val() as u64);
@@ -156,6 +170,23 @@ pub fn parse_cog_metadata(buffer: &[u8]) -> Result<CogMetadata, String> {
             _ => {}
         }
         offset += 12;
+    }
+
+    // Apply TIFF defaults for absent tags.
+    if meta.bits_per_sample == 0 {
+        meta.bits_per_sample = 32;
+    }
+    if meta.sample_format == 0 {
+        meta.sample_format = 1; // unsigned int
+    }
+    if meta.samples_per_pixel == 0 {
+        meta.samples_per_pixel = 1;
+    }
+    if meta.compression == 0 {
+        meta.compression = 1; // none
+    }
+    if meta.predictor == 0 {
+        meta.predictor = 1; // none
     }
 
     Ok(meta)
@@ -193,5 +224,39 @@ mod tests {
 
         let info = parse_cog_metadata(&buffer).unwrap();
         assert_eq!(info.image_width, 1024);
+    }
+
+    #[test]
+    fn test_parse_scalar_tags() {
+        // II, magic 42, IFD at 8; 6 entries: width,length,tilew,tilel,bits,sampfmt
+        let mut b = vec![0u8; 100];
+        b[0..2].copy_from_slice(b"II");
+        b[2..4].copy_from_slice(&42u16.to_le_bytes());
+        b[4..8].copy_from_slice(&8u32.to_le_bytes());
+        b[8..10].copy_from_slice(&6u16.to_le_bytes()); // 6 entries
+        let mut o = 10;
+        let put = |b: &mut [u8], o: usize, tag: u16, typ: u16, val: u32| {
+            b[o..o + 2].copy_from_slice(&tag.to_le_bytes());
+            b[o + 2..o + 4].copy_from_slice(&typ.to_le_bytes());
+            b[o + 4..o + 8].copy_from_slice(&1u32.to_le_bytes());
+            b[o + 8..o + 12].copy_from_slice(&val.to_le_bytes());
+        };
+        put(&mut b, o, 256, 4, 4);
+        o += 12; // ImageWidth=4
+        put(&mut b, o, 257, 4, 2);
+        o += 12; // ImageLength=2
+        put(&mut b, o, 322, 3, 4);
+        o += 12; // TileWidth=4 (SHORT)
+        put(&mut b, o, 323, 3, 2);
+        o += 12; // TileLength=2
+        put(&mut b, o, 258, 3, 16);
+        o += 12; // BitsPerSample=16
+        put(&mut b, o, 339, 3, 2); // SampleFormat=2 (signed int)
+        let m = parse_cog_metadata(&b).unwrap();
+        assert!(m.is_little_endian);
+        assert_eq!(m.bits_per_sample, 16);
+        assert_eq!(m.sample_format, 2);
+        assert_eq!(m.samples_per_pixel, 1); // defaulted
+        assert_eq!(m.compression, 1); // defaulted
     }
 }
