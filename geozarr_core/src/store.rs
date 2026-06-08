@@ -445,14 +445,22 @@ pub fn resolve_sync_store(
                                             .read_with(&root_str)
                                             .range(0..16384)
                                             .await
-                                            .unwrap_or_default()
+                                            .map_err(|e| {
+                                                format!(
+                                                    "failed to fetch COG header for item {idx} asset {name}: {e}"
+                                                )
+                                            })?
                                             .to_vec();
                                         let meta = crate::cog::parse_cog_metadata(&header_bytes)
-                                            .unwrap_or_default();
+                                            .map_err(|e| {
+                                                format!(
+                                                    "failed to parse COG header for item {idx} asset {name}: {e}"
+                                                )
+                                            })?;
                                         let store = crate::virtual_store::VirtualCogStore::new(
                                             operator, root_str, meta,
                                         );
-                                        (name, idx, store)
+                                        Ok::<_, String>((name, idx, store))
                                     });
                                 }
                                 let mut results: Vec<(
@@ -461,7 +469,8 @@ pub fn resolve_sync_store(
                                     crate::virtual_store::VirtualCogStore,
                                 )> = Vec::new();
                                 while let Some(res) = set.join_next().await {
-                                    if let Ok((name, idx, store)) = res {
+                                    if let Ok(item) = res {
+                                        let (name, idx, store) = item?;
                                         results.push((name, idx, store?));
                                     }
                                 }
