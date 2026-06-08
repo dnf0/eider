@@ -2,6 +2,9 @@
 sidebar_position: 2
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Extracting with polygons
 
 `eider extract` pulls the grid cells that fall inside a vector boundary. The
@@ -38,6 +41,11 @@ The `name` property identifies each polygon in the results.
 
 ## 2. Extract the cells inside the polygons
 
+You can perform the extraction using the CLI or natively in DuckDB using the Eider extension.
+
+<Tabs>
+<TabItem value="cli" label="CLI" default>
+
 ```bash
 eider extract climate_data.zarr/air_temperature scripts/demo_polygons.geojson \
   --out analysis.duckdb --yes
@@ -49,6 +57,22 @@ Data Volume: 38.01 MB
 - SUCCESS: Extraction complete!
 Run `eider shell analysis.duckdb` to explore the extracted data.
 ```
+
+</TabItem>
+<TabItem value="sql" label="DuckDB SQL">
+
+```sql
+D INSTALL spatial; LOAD spatial;
+D INSTALL eider; LOAD eider;
+D CREATE TABLE extracted_data AS
+  SELECT z.*, v.* EXCLUDE (geom)
+  FROM read_geo('climate_data.zarr/air_temperature') z,
+       ST_Read('scripts/demo_polygons.geojson') v
+  WHERE ST_Contains(v.geom, ST_Point(z.lon, z.lat));
+```
+
+</TabItem>
+</Tabs>
 
 This writes an `extracted_data` table containing only the cells inside `west`
 or `east`, with a `name` column tagging which polygon each cell came from. See
