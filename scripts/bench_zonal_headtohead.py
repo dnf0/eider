@@ -11,9 +11,11 @@ Later tasks add the contender runners, correctness gate, and timing loop.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import math
 import platform
+import signal
 import statistics
 import sys
 import time
@@ -621,6 +623,47 @@ CONTENDER_RASTERSTATS = "rasterstats"
 # Marker used in the stdout table / JSON when a cell is not applicable.
 NA_MARKER = "n/a"
 
+# Status string for a cell deliberately NOT timed because the contender is
+# known to be impractically slow at that scale (rasterstats above the cap).
+STATUS_IMPRACTICAL = "impractical"
+# Note recorded on impractical rasterstats cells (carried into the JSON).
+RASTERSTATS_IMPRACTICAL_NOTE = "~1000x slower (measured 1030s at 100k); not timed"
+
+# Default cap above which rasterstats is recorded as impractical, not timed.
+DEFAULT_RASTERSTATS_MAX_N = 20_000
+
+
+class _BudgetTimeout(TimeoutError):
+    """Raised by the SIGALRM handler when a single call exceeds the budget."""
+
+
+@contextlib.contextmanager
+def _alarm_guard(seconds: float | None):
+    """Hard per-call timeout via ``SIGALRM``, as a safety net for slow paths.
+
+    A pure-Python contender (rasterstats) that blows past ``seconds`` is
+    interrupted with a ``_BudgetTimeout``; fast C calls (exactextract) that
+    never return to the interpreter won't trip it. The alarm is always reset in
+    the ``finally`` so it can never leak into a later call. ``signal.alarm``
+    only works on the main thread of a real OS process (true here); if it is
+    unavailable or ``seconds`` is falsy, the guard is a no-op.
+    """
+    if not seconds or not hasattr(signal, "SIGALRM"):
+        yield
+        return
+
+    def _handler(signum, frame):  # noqa: ARG001 - signal handler signature
+        raise _BudgetTimeout(f"call exceeded hard budget of {seconds:.0f}s")
+
+    previous = signal.signal(signal.SIGALRM, _handler)
+    # signal.alarm takes whole seconds; round up so we never fire early.
+    signal.alarm(max(1, math.ceil(seconds)))
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+
 
 @dataclass(frozen=True)
 class TimingResult:
@@ -652,7 +695,10 @@ def time_call(
     """
     try:
         for _ in range(max(0, warmup)):
-            fn()
+            with _alarm_guard(budget_seconds):
+                fn()
+    except _BudgetTimeout as exc:
+        return TimingResult(None, "skipped (budget)", 0, str(exc))
     except Exception as exc:  # noqa: BLE001 - record, don't crash the matrix
         return TimingResult(None, "error", 0, f"{type(exc).__name__}: {exc}")
 
@@ -660,7 +706,10 @@ def time_call(
     for _ in range(max(1, reps)):
         start = time.perf_counter()
         try:
-            fn()
+            with _alarm_guard(budget_seconds):
+                fn()
+        except _BudgetTimeout as exc:
+            return TimingResult(None, "skipped (budget)", len(samples), str(exc))
         except Exception as exc:  # noqa: BLE001
             return TimingResult(None, "error", len(samples), f"{type(exc).__name__}: {exc}")
         elapsed = time.perf_counter() - start
@@ -868,6 +917,9 @@ class MatrixConfig:
     shape_override: dict[str, tuple[int, int]] = field(default_factory=dict)
     # n at which the correctness gate runs (the smallest count, by default).
     gate_n: int | None = None
+    # rasterstats is ~1000x slower than the C/SQL contenders; above this cap we
+    # record it as "impractical" instead of running it (would take hours).
+    rasterstats_max_n: int = DEFAULT_RASTERSTATS_MAX_N
 
 
 def _regimes_for(regime: str) -> list[str]:
@@ -949,6 +1001,19 @@ def run_matrix(cfg: MatrixConfig, conn) -> dict:
                             "status": NA_MARKER,
                         }
                         continue
+                    # Honest cap: do not run rasterstats above the cap; record
+                    # it as impractical (it is ~1000x slower than the others).
+                    if (
+                        contender == CONTENDER_RASTERSTATS
+                        and n > cfg.rasterstats_max_n
+                    ):
+                        row["timings"][contender] = {
+                            "seconds": None,
+                            "status": STATUS_IMPRACTICAL,
+                            "reps": 0,
+                            "detail": RASTERSTATS_IMPRACTICAL_NOTE,
+                        }
+                        continue
                     call = _make_contender_call(
                         contender, conn, case, convention, metric
                     )
@@ -999,6 +1064,8 @@ def _fmt_cell(timing: dict) -> str:
         return NA_MARKER
     if status == "skipped (budget)":
         return "SKIP(bdg)"
+    if status == STATUS_IMPRACTICAL:
+        return "IMPRACT"
     if status == "error":
         return "ERROR"
     return str(status)
@@ -1083,6 +1150,7 @@ def render_table(doc: dict) -> str:
     lines.append(
         "\nLegend: seconds = median wall-clock over reps (warmup excluded). "
         f"{NA_MARKER}=pairing not applicable, SKIP(bdg)=exceeded budget, "
+        "IMPRACT=not timed (rasterstats ~1000x slower above the cap), "
         "ERROR=runner raised. eider_ij = point-model index join (coarse/R1 only)."
     )
     return "\n".join(lines)
@@ -1134,6 +1202,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--regime", choices=["fine", "coarse", "both"], default="both", help="Regime(s)."
     )
     p.add_argument(
+        "--rasterstats-max-n",
+        type=int,
+        default=DEFAULT_RASTERSTATS_MAX_N,
+        help=(
+            "Do not run rasterstats for n above this cap; record it as "
+            f"'{STATUS_IMPRACTICAL}' instead (default: {DEFAULT_RASTERSTATS_MAX_N})."
+        ),
+    )
+    p.add_argument(
         "--quick",
         action="store_true",
         help="Tiny end-to-end self-test (small grid, n=200, 1 rep).",
@@ -1174,6 +1251,7 @@ def main(argv: list[str] | None = None) -> int:
         reps=reps,
         budget_seconds=args.budget_seconds,
         shape_override=shape_override,
+        rasterstats_max_n=args.rasterstats_max_n,
     )
 
     conn = eider_conn()
