@@ -20,6 +20,20 @@ fn timestack_opens_as_3d_with_time_coords() {
     );
     assert_eq!(ds.shape, vec![2u64, 2, 4]);
     let time = ds.coords.get("time").expect("time coords present");
+    // DIAGNOSTIC (temporary): dump the resolved time coords + first cell of each
+    // slice to capture Windows-vs-mac ordering on CI.
+    {
+        use zarrs::array_subset::ArraySubset;
+        let vals: Vec<i16> = ds
+            .array
+            .retrieve_array_subset_elements::<i16>(&ArraySubset::new_with_shape(vec![2, 2, 4]))
+            .unwrap();
+        eprintln!(
+            "DIAG time={time:?} slice0[0,0]={} slice1[0,0]={}",
+            vals[0], vals[8]
+        );
+        eprintln!("DIAG datetimes parsed: jan_epoch should be 1767225600");
+    }
     // 2026-01-01 and 2026-02-01 in epoch seconds, ascending
     assert_eq!(time.len(), 2);
     assert!(time[0] < time[1]);
