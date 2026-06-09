@@ -10,3 +10,13 @@ shapely
 pyarrow
 numpy
 pytest
+
+# Remote partial-read benchmark deps.
+# NOTE: zarr is pinned <3 (v2): the eider extension reads Zarr v2 metadata,
+# and xarray.to_zarr with this version writes v2 consolidated metadata (.zarray).
+xarray==2026.4.0
+zarr==2.18.7
+fsspec==2026.4.0
+aiohttp==3.14.1
+requests==2.34.2
+rioxarray==0.22.0
