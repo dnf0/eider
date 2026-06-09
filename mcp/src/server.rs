@@ -357,4 +357,32 @@ mod tests {
         });
         assert_eq!(tr.to_value(), expected);
     }
+
+    #[tokio::test]
+    async fn test_server_run_success() {
+        let conn = eider_session::open_session().unwrap();
+        let server = EiderServer::new(conn);
+        let res = server
+            .run(|_conn| Ok(json!({"success": true})))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            res.content[0],
+            rmcp::model::Annotated::<rmcp::model::RawContent>::text("{\"success\":true}")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_server_run_error() {
+        let conn = eider_session::open_session().unwrap();
+        let server = EiderServer::new(conn);
+        let err_res = server
+            .run(|_conn| Err(color_eyre::eyre::eyre!("duckdb connection error")))
+            .await;
+
+        assert!(err_res.is_err());
+        let err = err_res.unwrap_err();
+        assert_eq!(err.message, "duckdb connection error");
+    }
 }
