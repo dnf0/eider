@@ -12,8 +12,8 @@ use rmcp::model::CallToolRequestParams;
 use rmcp::ServiceExt;
 use serde_json::{Map, Value};
 
-/// The seven tools the adapter must expose.
-const EXPECTED_TOOLS: [&str; 7] = [
+/// The eight tools the adapter must expose.
+const EXPECTED_TOOLS: [&str; 8] = [
     "describe_dataset",
     "estimate_cost",
     "read_region",
@@ -21,6 +21,7 @@ const EXPECTED_TOOLS: [&str; 7] = [
     "list_tables",
     "describe_table",
     "run_sql",
+    "extract_point_timeseries",
 ];
 
 /// Skip-guard: returns false (and prints) when the eider extension is not built.
@@ -88,7 +89,7 @@ async fn protocol_initialize_list_and_call() {
     assert_eq!(
         listed.tools.len(),
         EXPECTED_TOOLS.len(),
-        "exactly the seven curated tools should be exposed; got {names:?}"
+        "exactly the eight curated tools should be exposed; got {names:?}"
     );
 
     // tools/call: describe_dataset against the committed sample.
