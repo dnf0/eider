@@ -267,6 +267,124 @@ pub fn zonal_stats(
     Ok(out)
 }
 
+/// Extract the timeseries for a specific point.
+///
+/// Executes a two-phase query:
+/// 1. Discovers the grid cell coordinates nearest to the point.
+/// 2. Reads the full timeseries for exactly those cells, aggregating if bilinear.
+pub fn extract_point_timeseries(
+    conn: &Connection,
+    uri: &str,
+    lat: f64,
+    lon: f64,
+    method: &str,
+    value_col: Option<&str>,
+) -> EyreResult<Value> {
+    if method != "nearest" && method != "bilinear" {
+        return Err(eyre!("method must be 'nearest' or 'bilinear'"));
+    }
+    let vc = value_col.unwrap_or("value");
+    if vc.is_empty() || !vc.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        return Err(eyre!("invalid value column"));
+    }
+    let uri = esc(uri);
+
+    // Phase 1: Coordinate Discovery
+    let discovery_sql = format!(
+        "WITH grid AS (
+             SELECT lat, lon
+             FROM read_geo('{uri}', time_min := 0, time_max := 0)
+         ),
+         distances AS (
+             SELECT lat, lon, ST_Distance(ST_Point(lon, lat), ST_Point({lon}, {lat})) AS dist
+             FROM grid
+         )
+         SELECT lat, lon, dist
+         FROM distances
+         ORDER BY dist ASC
+         LIMIT {limit}",
+        limit = if method == "nearest" { 1 } else { 4 }
+    );
+    let closest_rows_value = rows_as_json(conn, &discovery_sql)?;
+    let closest_rows = closest_rows_value.as_array().unwrap();
+    if closest_rows.is_empty() {
+        return Err(eyre!("No grid cells found"));
+    }
+
+    let mut lat_min = f64::MAX;
+    let mut lat_max = f64::MIN;
+    let mut lon_min = f64::MAX;
+    let mut lon_max = f64::MIN;
+    for row in closest_rows {
+        let lat = row["lat"].as_f64().unwrap();
+        let lon = row["lon"].as_f64().unwrap();
+        if lat < lat_min {
+            lat_min = lat;
+        }
+        if lat > lat_max {
+            lat_max = lat;
+        }
+        if lon < lon_min {
+            lon_min = lon;
+        }
+        if lon > lon_max {
+            lon_max = lon;
+        }
+    }
+
+    let discovery_cte = format!(
+        "WITH grid AS (
+             SELECT lat, lon
+             FROM read_geo('{uri}', time_min := 0, time_max := 0)
+         ),
+         distances AS (
+             SELECT lat, lon, ST_Distance(ST_Point(lon, lat), ST_Point({lon}, {lat})) AS dist
+             FROM grid
+         ),
+         closest AS (
+             SELECT lat, lon, dist
+             FROM distances
+             ORDER BY dist ASC
+             LIMIT {limit}
+         )",
+        limit = if method == "nearest" { 1 } else { 4 }
+    );
+
+    // Phase 2: Exact Pushdown
+    let extract_query = if method == "nearest" {
+        format!(
+            "{discovery_cte}
+             SELECT d.time, c.lat, c.lon, d.{vc}
+             FROM closest c
+             JOIN read_geo('{uri}',
+                 lat_min := {lat_min},
+                 lat_max := {lat_max},
+                 lon_min := {lon_min},
+                 lon_max := {lon_max}
+             ) d ON c.lat = d.lat AND c.lon = d.lon"
+        )
+    } else {
+        format!(
+            "{discovery_cte}
+             SELECT d.time, {lat} AS lat, {lon} AS lon,
+                    sum(d.{vc} * (1.0 / nullif(c.dist, 0))) / sum(1.0 / nullif(c.dist, 0)) AS {vc}
+             FROM closest c
+             JOIN read_geo('{uri}',
+                 lat_min := {lat_min},
+                 lat_max := {lat_max},
+                 lon_min := {lon_min},
+                 lon_max := {lon_max}
+             ) d ON c.lat = d.lat AND c.lon = d.lon
+             GROUP BY d.time
+             ORDER BY d.time"
+        )
+    };
+
+    let mut out = materialize(conn, &extract_query, DEFAULT_LIMIT)?;
+    out["method"] = json!(method);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -404,5 +522,39 @@ mod tests {
             Some(100)
         )
         .is_err());
+    }
+
+    #[test]
+    fn extract_point_timeseries_nearest() {
+        let Some(c) = session() else { return };
+        // Valid lat/lon inside the dataset bounds
+        let v = extract_point_timeseries(&c, &zarr(), 50.0, -10.0, "nearest", None).unwrap();
+        assert_eq!(v["method"], json!("nearest"));
+        assert!(v["row_count"].as_i64().unwrap() >= 1);
+        let rows = v["rows"].as_array().unwrap();
+        assert!(rows[0].get("time").is_some());
+        assert!(rows[0].get("value").is_some());
+        assert!(v["table_handle"]
+            .as_str()
+            .unwrap()
+            .starts_with("mcp_result_"));
+    }
+
+    #[test]
+    fn extract_point_timeseries_bilinear() {
+        let Some(c) = session() else { return };
+        let v = extract_point_timeseries(&c, &zarr(), 50.0, -10.0, "bilinear", None).unwrap();
+        assert_eq!(v["method"], json!("bilinear"));
+        assert!(v["row_count"].as_i64().unwrap() >= 1);
+        let rows = v["rows"].as_array().unwrap();
+        assert!(rows[0].get("time").is_some());
+        assert!(rows[0].get("value").is_some());
+    }
+
+    #[test]
+    fn extract_point_timeseries_invalid_method() {
+        let Some(c) = session() else { return };
+        let res = extract_point_timeseries(&c, &zarr(), 50.0, -10.0, "bicubic", None);
+        assert!(res.is_err());
     }
 }
