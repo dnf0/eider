@@ -1,0 +1,3 @@
+- [x] Task 1: Update Core API Signatures to accept QueryConstraints
+- [x] Task 2: Pushdown BBox in STAC HTTP Arm
+- [x] Task 3: Pre-parse Constraints and Validate BBox in DuckDB Bind
