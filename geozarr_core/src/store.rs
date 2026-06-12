@@ -411,8 +411,22 @@ pub fn resolve_sync_store(
             let mut all_features = Vec::new();
             let mut first_json: Option<serde_json::Value> = None;
             let mut single_feature_json: Option<serde_json::Value> = None;
+            
+            let mut visited_urls = std::collections::HashSet::new();
+            let max_pages = 1000;
+            let mut current_page = 0;
 
-            println!("ENTERING LOOP path={}", path); loop {
+            loop {
+                if current_page >= max_pages {
+                    eprintln!("Warning: STAC pagination stopped after reaching max pages ({})", max_pages);
+                    break;
+                }
+                if !visited_urls.insert(fetch_url.clone()) {
+                    eprintln!("Warning: STAC pagination stopped due to cycle at {}", fetch_url);
+                    break;
+                }
+                current_page += 1;
+
                 if let Ok(resp) = reqwest::blocking::get(&fetch_url) {
                     if let Ok(mut json) = resp.json::<serde_json::Value>() {
                         if json.get("stac_version").is_some()
@@ -430,7 +444,16 @@ pub fn resolve_sync_store(
                             if let Some(links) = json.get("links").and_then(|l| l.as_array()) {
                                 if let Some(next_link) = links.iter().find(|l| l.get("rel").and_then(|r| r.as_str()) == Some("next")) {
                                     if let Some(href) = next_link.get("href").and_then(|h| h.as_str()) {
-                                        next_href = Some(href.to_string());
+                                        // Resolve relative URLs
+                                        if let Ok(base_url) = reqwest::Url::parse(&fetch_url) {
+                                            if let Ok(resolved) = base_url.join(href) {
+                                                next_href = Some(resolved.to_string());
+                                            } else {
+                                                next_href = Some(href.to_string());
+                                            }
+                                        } else {
+                                            next_href = Some(href.to_string());
+                                        }
                                     }
                                 }
                             }
@@ -445,9 +468,13 @@ pub fn resolve_sync_store(
                             single_feature_json = Some(json);
                             break;
                         }
+                    } else if current_page > 1 {
+                        return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to parse STAC pagination response from {}", fetch_url))));
                     } else {
                         break;
                     }
+                } else if current_page > 1 {
+                    return Err(Box::new(std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to fetch STAC pagination page from {}", fetch_url))));
                 } else {
                     break;
                 }
@@ -721,7 +748,7 @@ pub fn resolve_sync_store(
             let mut parts: Vec<&str> = path.split('/').collect();
             if parts.len() > 3 {
                 let asset_name = parts.pop().unwrap();
-                let parent_url = parts.join("/"); println!("PARENT URL: {}", parent_url);
+                let parent_url = parts.join("/");
                 if let Ok(resp) = reqwest::blocking::get(&parent_url) {
                     if let Ok(json) = resp.json::<serde_json::Value>() {
                         if json.get("stac_version").is_some()
